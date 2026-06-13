@@ -14,10 +14,19 @@ inference_steps="${HIMEM_INFERENCE_STEPS:-1}"
 skip_preflight="${HIMEM_SKIP_PREFLIGHT:-0}"
 
 if [ -z "$ckpt_dir" ]; then
-  printf 'Usage: HIMEM_PYTHON=/path/to/python %s /path/to/HiMem_LIBERO_checkpoint\n' "$0" >&2
-  printf 'Or set HIMEM_CKPT_DIR=/path/to/checkpoint.\n' >&2
+  printf 'Usage: HIMEM_PYTHON=.venv/bin/python %s checkpoints/HiMem_LIBERO\n' "$0" >&2
+  printf 'Or set HIMEM_CKPT_DIR=checkpoints/HiMem_LIBERO.\n' >&2
   exit 2
 fi
+
+case "$ckpt_dir" in
+  /*)
+    printf 'Checkpoint directory must be project-relative: %s\n' "$ckpt_dir" >&2
+    exit 2
+    ;;
+esac
+
+cd "$repo_root"
 
 if [ ! -d "$ckpt_dir" ]; then
   printf 'Checkpoint directory does not exist: %s\n' "$ckpt_dir" >&2
@@ -25,13 +34,13 @@ if [ ! -d "$ckpt_dir" ]; then
 fi
 
 if [ "$skip_preflight" != "1" ]; then
-  "$preflight_python" "$repo_root/scripts/preflight.py" \
+  "$preflight_python" scripts/preflight.py \
+    --repo-root "." \
     --dataset-config "" \
     --checkpoint "$ckpt_dir" \
     --skip-shell-syntax
 fi
 
-cd "$repo_root"
 exec "$python_bin" scripts/himem_server.py \
   --ckpt_dir "$ckpt_dir" \
   --host "$host" \

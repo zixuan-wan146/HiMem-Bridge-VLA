@@ -39,7 +39,7 @@ def test_run_calvin_eval_script_uses_full_eval_defaults():
 
     assert result.returncode == 0, result.stderr
     env = parse_env_output(result.stdout)
-    assert env["CALVIN_ROOT"] == "/root/autodl-tmp/calvin"
+    assert env["CALVIN_ROOT"] == "datasets/calvin/runtime"
     assert env["HIMEM_CALVIN_NUM_SEQUENCES"] == "1000"
     assert env["HIMEM_CALVIN_MAX_STEPS_PER_SUBTASK"] == "360"
     assert env["HIMEM_CALVIN_HORIZON"] == "14"
@@ -69,20 +69,18 @@ def test_run_calvin_eval_script_preserves_explicit_overrides():
     assert env["HIMEM_CALVIN_RESULT_FILE"].endswith("custom_calvin_results.json")
 
 
-def test_run_calvin_eval_script_can_group_outputs_under_run_dir(tmp_path):
-    run_dir = tmp_path / "calvin_eval_run"
-    result = run_eval_script({"HIMEM_CALVIN_RUN_DIR": str(run_dir)})
+def test_run_calvin_eval_script_can_group_outputs_under_run_dir():
+    run_dir = "run_outputs/calvin_eval_run"
+    result = run_eval_script({"HIMEM_CALVIN_RUN_DIR": run_dir})
 
     assert result.returncode == 0, result.stderr
     env = parse_env_output(result.stdout)
-    assert env["HIMEM_CALVIN_RUN_DIR"] == str(run_dir)
-    assert env["HIMEM_CALVIN_LOG_DIR"] == str(run_dir / "logs")
-    assert env["HIMEM_CALVIN_VIDEO_DIR"] == str(run_dir / "videos")
-    assert env["HIMEM_CALVIN_LOG_FILE"] == str(run_dir / "logs" / "HiMem_calvin_eval.txt")
-    assert env["HIMEM_CALVIN_RESULT_FILE"] == str(
-        run_dir / "results" / "HiMem_calvin_eval_results.json"
-    )
-    assert env["HIMEM_CALVIN_MANIFEST_FILE"] == str(run_dir / "run_manifest.json")
+    assert env["HIMEM_CALVIN_RUN_DIR"] == run_dir
+    assert env["HIMEM_CALVIN_LOG_DIR"] == f"{run_dir}/logs"
+    assert env["HIMEM_CALVIN_VIDEO_DIR"] == f"{run_dir}/videos"
+    assert env["HIMEM_CALVIN_LOG_FILE"] == f"{run_dir}/logs/HiMem_calvin_eval.txt"
+    assert env["HIMEM_CALVIN_RESULT_FILE"] == f"{run_dir}/results/HiMem_calvin_eval_results.json"
+    assert env["HIMEM_CALVIN_MANIFEST_FILE"] == f"{run_dir}/run_manifest.json"
 
 
 def test_run_calvin_eval_script_loads_repo_relative_profile():
@@ -90,7 +88,7 @@ def test_run_calvin_eval_script_loads_repo_relative_profile():
 
     assert result.returncode == 0, result.stderr
     env = parse_env_output(result.stdout)
-    assert env["HIMEM_CALVIN_PROFILE"] == str(REPO_ROOT / "configs" / "calvin_profiles" / "smoke.env")
+    assert env["HIMEM_CALVIN_PROFILE"] == "configs/calvin_profiles/smoke.env"
     assert env["HIMEM_CALVIN_NUM_SEQUENCES"] == "1"
     assert env["HIMEM_CALVIN_MAX_STEPS_PER_SUBTASK"] == "1"
     assert env["HIMEM_CALVIN_HORIZON"] == "1"

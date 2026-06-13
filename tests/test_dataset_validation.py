@@ -19,7 +19,7 @@ def minimal_config(dataset_path: Path) -> dict:
         "data_groups": {
             "test_arm": {
                 "tiny_dataset": {
-                    "path": str(dataset_path),
+                    "path": dataset_path.name,
                     "view_map": {"image_1": "observation.images.image"},
                 }
             }

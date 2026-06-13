@@ -35,8 +35,8 @@ def test_calvin_config_prefers_shared_server_uri():
 def test_calvin_config_can_override_paths_and_counts():
     config = CalvinClientConfig.from_env(
         {
-            "HIMEM_CALVIN_ROOT": "/data/calvin",
-            "HIMEM_CALVIN_DATASET_PATH": "/datasets/task_D_D",
+            "HIMEM_CALVIN_ROOT": "datasets/calvin/runtime",
+            "HIMEM_CALVIN_DATASET_PATH": "datasets/calvin/runtime/dataset/task_D_D",
             "HIMEM_CALVIN_NUM_SEQUENCES": "3",
             "HIMEM_CALVIN_SEQUENCE_OFFSET": "7",
             "HIMEM_CALVIN_SAVE_VIDEO": "true",
@@ -44,8 +44,8 @@ def test_calvin_config_can_override_paths_and_counts():
         }
     )
 
-    assert config.calvin_root == "/data/calvin"
-    assert config.dataset_path == "/datasets/task_D_D"
+    assert config.calvin_root == "datasets/calvin/runtime"
+    assert config.dataset_path == "datasets/calvin/runtime/dataset/task_D_D"
     assert config.num_sequences == 3
     assert config.sequence_offset == 7
     assert config.save_video is True
@@ -62,11 +62,11 @@ def test_invalid_reset_memory_scope_is_rejected():
 
 
 def test_configure_calvin_environment_sets_calvin_root_and_egl_platform():
-    config = CalvinClientConfig.from_env({"HIMEM_MUJOCO_GL": "egl", "HIMEM_CALVIN_ROOT": "/data/calvin"})
+    config = CalvinClientConfig.from_env({"HIMEM_MUJOCO_GL": "egl", "HIMEM_CALVIN_ROOT": "datasets/calvin/runtime"})
     environ = {}
 
     configure_calvin_environment(config, environ)
 
-    assert environ["CALVIN_ROOT"] == "/data/calvin"
+    assert environ["CALVIN_ROOT"] == "datasets/calvin/runtime"
     assert environ["MUJOCO_GL"] == "egl"
     assert environ["PYOPENGL_PLATFORM"] == "egl"

@@ -8,6 +8,8 @@ import subprocess
 import sys
 from typing import Any, Mapping, Sequence
 
+from himem_bridge_vla.path_utils import display_project_path, sanitize_project_paths
+
 
 def build_run_metadata(
     *,
@@ -21,24 +23,26 @@ def build_run_metadata(
     argv = sys.argv if argv is None else argv
     created_at_utc = created_at_utc or datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
 
+    argv_items = [str(item) for item in argv]
+    sanitized_argv = sanitize_project_paths(argv_items, repo_path)
     return {
         "created_at_utc": created_at_utc,
-        "cwd": str(Path.cwd()),
-        "argv": [str(item) for item in argv],
-        "command": " ".join(str(item) for item in argv),
+        "cwd": display_project_path(Path.cwd(), repo_path),
+        "argv": sanitized_argv,
+        "command": " ".join(str(item) for item in sanitized_argv),
         "python": {
-            "executable": sys.executable,
+            "executable": display_project_path(sys.executable, repo_path),
             "version": platform.python_version(),
         },
         "platform": platform.platform(),
         "hostname": platform.node(),
         "git": {
-            "repo_root": str(repo_path),
+            "repo_root": ".",
             "commit": _git_output(repo_path, "rev-parse", "HEAD"),
             "branch": _git_output(repo_path, "rev-parse", "--abbrev-ref", "HEAD"),
             "is_dirty": _git_is_dirty(repo_path),
         },
-        "environment": _safe_environment(environ),
+        "environment": _safe_environment(environ, repo_path),
     }
 
 
@@ -65,7 +69,7 @@ def _git_is_dirty(repo_root: Path) -> bool | None:
     return bool(status)
 
 
-def _safe_environment(environ: Mapping[str, str]) -> dict[str, str]:
+def _safe_environment(environ: Mapping[str, str], repo_root: Path) -> dict[str, str]:
     allowed_exact = {
         "CALVIN_ROOT",
         "HF_ENDPOINT",
@@ -85,5 +89,5 @@ def _safe_environment(environ: Mapping[str, str]) -> dict[str, str]:
         if any(fragment in key.upper() for fragment in blocked_fragments):
             continue
         if key in allowed_exact or any(key.startswith(prefix) for prefix in allowed_prefixes):
-            safe_items[key] = str(value)
+            safe_items[key] = str(sanitize_project_paths(str(value), repo_root))
     return dict(sorted(safe_items.items()))

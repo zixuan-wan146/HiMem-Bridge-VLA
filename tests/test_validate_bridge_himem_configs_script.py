@@ -1,5 +1,6 @@
 import subprocess
 from pathlib import Path
+import sys
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -7,7 +8,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 
 def test_validate_bridge_himem_configs_script_loads_default_configs():
     result = subprocess.run(
-        ["python3", "scripts/validate_bridge_himem_configs.py"],
+        [sys.executable, "scripts/validate_bridge_himem_configs.py"],
         cwd=REPO_ROOT,
         text=True,
         capture_output=True,

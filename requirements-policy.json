@@ -2,28 +2,12 @@
   "files": {
     "requirements.txt": {
       "allow_unpinned": {
-        "accelerate": "Inherited HiMem-Bridge-VLA runtime dependency; exact GPU wheel set still needs confirmation on the target server.",
-        "av": "Video/runtime dependency; pin after server reproduction records the exact installed build.",
-        "deepspeed": "GPU/runtime dependency with CUDA-specific wheels; pin after confirming the target server build.",
-        "diffusers": "Inherited HiMem-Bridge-VLA runtime dependency; exact server version has not yet been captured.",
-        "einops": "Inherited HiMem-Bridge-VLA runtime dependency; exact server version has not yet been captured.",
-        "fvcore": "Inherited HiMem-Bridge-VLA runtime dependency; exact server version has not yet been captured.",
-        "matplotlib": "Analysis dependency; pin after selecting the final plotting stack for result reporting.",
-        "ninja": "Build helper for CUDA packages; pin after confirming the target server build path.",
-        "opencv-python": "Runtime image dependency; pin after server reproduction records the exact installed build.",
-        "pandas": "Training/data dependency; pin after server reproduction records the exact installed build.",
-        "pyarrow": "Training/data dependency tied to dataset parquet compatibility; pin after dataset smoke is run.",
-        "swanlab": "Optional experiment logging dependency; pin after deciding whether it remains in the base workflow.",
-        "timm": "Inherited HiMem-Bridge-VLA runtime dependency; exact server version has not yet been captured.",
-        "wandb": "Optional experiment logging dependency; pin after deciding whether it remains in the base workflow.",
-        "websockets": "Server/client protocol dependency; pin after confirming compatibility with both HiMem and LIBERO envs."
+        "numpy": "Bounded to numpy 1.x for compatibility with torch/OpenCV and the local research stack."
       }
     },
     "requirements-dev.txt": {
       "allow_unpinned": {
-        "numpy": "Lightweight local/CI test dependency; exact dev lock remains pending.",
-        "pytest": "Lightweight local/CI test dependency; exact dev lock remains pending.",
-        "ruff": "Lightweight lint dependency; exact dev lock remains pending."
+        "numpy": "Bounded to numpy 1.x for local tests and WSL research environments."
       }
     },
     "requirements-libero.txt": {

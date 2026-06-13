@@ -27,6 +27,7 @@ def minmax_denormalize(value: torch.Tensor, min_value: torch.Tensor, max_value: 
 
 class NormalizationStats:
     def __init__(self, stats_or_path, target_dim: int = TARGET_STATE_DIM):
+        self.target_dim = int(target_dim)
         if isinstance(stats_or_path, (str, Path)):
             with open(stats_or_path, "r") as f:
                 stats = json.load(f)
@@ -37,19 +38,25 @@ class NormalizationStats:
             raise ValueError(f"norm_stats.json should contain one robot key, got: {list(stats.keys())}")
 
         robot_stats = stats[next(iter(stats))]
-        self.state_min = pad_vector(robot_stats["observation.state"]["min"], target_dim)
-        self.state_max = pad_vector(robot_stats["observation.state"]["max"], target_dim)
-        self.action_min = pad_vector(robot_stats["action"]["min"], target_dim)
-        self.action_max = pad_vector(robot_stats["action"]["max"], target_dim)
+        self.state_min = pad_vector(robot_stats["observation.state"]["min"], self.target_dim)
+        self.state_max = pad_vector(robot_stats["observation.state"]["max"], self.target_dim)
+        self.action_min = pad_vector(robot_stats["action"]["min"], self.target_dim)
+        self.action_max = pad_vector(robot_stats["action"]["max"], self.target_dim)
 
     def normalize_state(self, state: torch.Tensor) -> torch.Tensor:
-        state_min = self.state_min.to(state.device, dtype=state.dtype)
-        state_max = self.state_max.to(state.device, dtype=state.dtype)
+        state_dim = state.shape[-1]
+        if state_dim > self.state_min.shape[0]:
+            raise ValueError(f"State dimension {state_dim} exceeds normalizer dimension {self.state_min.shape[0]}")
+        state_min = self.state_min[:state_dim].to(state.device, dtype=state.dtype)
+        state_max = self.state_max[:state_dim].to(state.device, dtype=state.dtype)
         return minmax_normalize(state, state_min, state_max)
 
     def denormalize_action(self, action: torch.Tensor) -> torch.Tensor:
-        action_min = self.action_min.to(action.device, dtype=action.dtype)
-        action_max = self.action_max.to(action.device, dtype=action.dtype)
         if action.ndim == 1:
             action = action.view(1, -1)
+        action_dim = action.shape[-1]
+        if action_dim > self.action_min.shape[0]:
+            raise ValueError(f"Action dimension {action_dim} exceeds normalizer dimension {self.action_min.shape[0]}")
+        action_min = self.action_min[:action_dim].to(action.device, dtype=action.dtype)
+        action_max = self.action_max[:action_dim].to(action.device, dtype=action.dtype)
         return minmax_denormalize(action, action_min, action_max)

@@ -124,7 +124,7 @@ def test_main_passes_for_matching_thresholds(tmp_path: Path):
 
     result = subprocess.run(
         [
-            "python3",
+            sys.executable,
             str(SCRIPT),
             str(result_file),
             "--min-success-rate",
@@ -148,7 +148,7 @@ def test_main_fails_for_regression_against_baseline(tmp_path: Path):
 
     result = subprocess.run(
         [
-            "python3",
+            sys.executable,
             str(SCRIPT),
             str(candidate),
             "--baseline",

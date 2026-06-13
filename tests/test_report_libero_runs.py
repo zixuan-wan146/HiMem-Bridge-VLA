@@ -118,7 +118,7 @@ def test_main_returns_failure_when_metric_gate_fails(tmp_path: Path):
 
     result = subprocess.run(
         [
-            "python3",
+            sys.executable,
             str(SCRIPT),
             str(run_dir),
             "--output-dir",

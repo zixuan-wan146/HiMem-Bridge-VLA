@@ -14,16 +14,25 @@ script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 repo_root="$(cd "${HIMEM_EXPORT_REPO:-$script_dir/..}" && pwd)"
 base_ref="${HIMEM_EXPORT_BASE:-origin/main}"
 timestamp="$(date -u +%Y%m%dT%H%M%SZ)"
-out_dir="${HIMEM_EXPORT_DIR:-$repo_root/exports/unpushed_commits_$timestamp}"
+out_dir="${HIMEM_EXPORT_DIR:-exports/unpushed_commits_$timestamp}"
 python_bin="${PYTHON:-python3}"
 
+if ! command -v "$python_bin" >/dev/null 2>&1; then
+  if [ "$python_bin" = "python3" ] && command -v python >/dev/null 2>&1; then
+    python_bin="python"
+  else
+    fail "Python executable not found: $python_bin"
+  fi
+fi
+
 case "$out_dir" in
-  /*) ;;
-  *) out_dir="$repo_root/$out_dir" ;;
+  /*) fail "HIMEM_EXPORT_DIR must be project-relative: $out_dir" ;;
 esac
 
+cd "$repo_root"
+
 git -C "$repo_root" rev-parse --is-inside-work-tree >/dev/null 2>&1 ||
-  fail "not a Git repository: $repo_root"
+  fail "not a Git repository: ."
 
 git -C "$repo_root" rev-parse --verify --quiet "$base_ref^{commit}" >/dev/null ||
   fail "base ref does not exist or is not a commit: $base_ref"
@@ -33,6 +42,8 @@ if [ "$commit_count" = "0" ]; then
   fail "no commits to export: HEAD is not ahead of $base_ref"
 fi
 
+status_short="$(git -C "$repo_root" status --short)"
+
 if [ -e "$out_dir" ] && [ -n "$(find "$out_dir" -mindepth 1 -maxdepth 1 -print -quit)" ]; then
   fail "output directory already exists and is not empty: $out_dir"
 fi
@@ -41,7 +52,6 @@ mkdir -p "$out_dir/patches"
 
 base_commit="$(git -C "$repo_root" rev-parse "$base_ref")"
 head_commit="$(git -C "$repo_root" rev-parse HEAD)"
-status_short="$(git -C "$repo_root" status --short)"
 
 if [ -n "$status_short" ]; then
   log "working tree has uncommitted changes; only committed changes are exported"
@@ -49,7 +59,7 @@ fi
 
 git -C "$repo_root" format-patch "$base_ref"..HEAD -o "$out_dir/patches" >/dev/null
 
-"$python_bin" - "$repo_root" "$out_dir" "$base_ref" "$base_commit" "$head_commit" "$commit_count" <<'PY'
+"$python_bin" - "$repo_root" "$out_dir" "$base_ref" "$base_commit" "$head_commit" "$commit_count" "$status_short" <<'PY'
 from __future__ import annotations
 
 import datetime as _dt
@@ -65,6 +75,7 @@ base_ref = sys.argv[3]
 base_commit = sys.argv[4]
 head_commit = sys.argv[5]
 commit_count = int(sys.argv[6])
+status_short_raw = sys.argv[7]
 
 
 def git(*args: str) -> str:
@@ -85,11 +96,11 @@ for line in log_output.splitlines():
         }
     )
 
-status_short = git("status", "--short").splitlines()
+status_short = [line for line in status_short_raw.splitlines() if line]
 patches = sorted(str(path.relative_to(out_dir)) for path in (out_dir / "patches").glob("*.patch"))
 manifest = {
     "created_at_utc": _dt.datetime.now(_dt.timezone.utc).isoformat(),
-    "repo_root": str(repo_root),
+    "repo_root": ".",
     "base_ref": base_ref,
     "base_commit": base_commit,
     "head_commit": head_commit,
@@ -109,7 +120,7 @@ cat > "$out_dir/README.md" <<README
 
 Created from:
 
-- Repository: \`$repo_root\`
+- Repository: \`.\`
 - Base ref: \`$base_ref\`
 - Base commit: \`$base_commit\`
 - Head commit: \`$head_commit\`
@@ -118,11 +129,11 @@ Created from:
 Apply this bundle to another clone whose history contains \`$base_commit\`:
 
 \`\`\`bash
-git am /path/to/export/patches/*.patch
+git am exports/<export-name>/patches/*.patch
 python3 -m pytest
 python3 scripts/preflight.py
 bash -n scripts/*.sh
-PYTHONPYCACHEPREFIX=/tmp/himem_pycache python3 -m compileall -q himem_bridge_vla evaluations scripts tests
+PYTHONPYCACHEPREFIX=run_outputs/pycache python3 -m compileall -q himem_bridge_vla evaluations scripts tests
 git diff --check
 \`\`\`
 

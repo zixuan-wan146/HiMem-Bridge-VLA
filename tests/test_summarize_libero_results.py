@@ -147,7 +147,7 @@ def test_write_markdown_and_csv_tables(tmp_path):
 def test_main_reports_missing_inputs_without_traceback(capsys):
     module = load_summary_module()
 
-    exit_code = module.main(["/tmp/definitely_missing_libero_results.json"])
+    exit_code = module.main(["run_outputs/definitely_missing_libero_results.json"])
 
     captured = capsys.readouterr()
     assert exit_code == 1

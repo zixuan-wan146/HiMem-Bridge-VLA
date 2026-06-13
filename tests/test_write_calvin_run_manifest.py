@@ -31,7 +31,7 @@ def test_build_calvin_manifest_tracks_calvin_environment_and_redacts_secrets(tmp
             "HIMEM_CALVIN_NUM_SEQUENCES": "1000",
             "HIMEM_SERVER_URI": "ws://127.0.0.1:9000",
             "HIMEM_API_TOKEN": "secret",
-            "CALVIN_ROOT": "/data/calvin",
+            "CALVIN_ROOT": "datasets/calvin/runtime",
             "UNRELATED": "ignored",
         },
         argv=["write_calvin_run_manifest.py"],
@@ -40,7 +40,7 @@ def test_build_calvin_manifest_tracks_calvin_environment_and_redacts_secrets(tmp
     assert manifest["schema_version"] == 1
     assert manifest["run_kind"] == "eval"
     assert manifest["calvin"]["HIMEM_CALVIN_CKPT_NAME"] == "calvin_eval"
-    assert manifest["calvin"]["CALVIN_ROOT"] == "/data/calvin"
+    assert manifest["calvin"]["CALVIN_ROOT"] == "datasets/calvin/runtime"
     assert "HIMEM_API_TOKEN" not in manifest["metadata"]["environment"]
     assert "UNRELATED" not in manifest["metadata"]["environment"]
 

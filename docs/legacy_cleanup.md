@@ -29,7 +29,7 @@ HiMem-Bridge-VLA edits.
 Safer archive option:
 
 ```bash
-cd /path/to/workspace-parent
+cd workspace-parent
 tar -czf legacy_checkout_$(date +%Y%m%d).tar.gz legacy_checkout
 rm -rf legacy_checkout
 ```
@@ -37,13 +37,13 @@ rm -rf legacy_checkout
 Direct removal:
 
 ```bash
-rm -rf /path/to/workspace-parent/legacy_checkout
+rm -rf legacy_checkout
 ```
 
 After removal, run Bridge-HiMem checks from:
 
 ```bash
-cd /path/to/HiMem-Bridge-VLA
+cd HiMem-Bridge-VLA
 python3 scripts/validate_bridge_himem_configs.py
 python3 -m pytest -q
 ```

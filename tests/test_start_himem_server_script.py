@@ -30,8 +30,8 @@ def valid_norm_stats() -> dict:
 
 
 def make_valid_checkpoint(tmp_path: Path) -> Path:
-    ckpt_dir = tmp_path / "ckpt"
-    ckpt_dir.mkdir()
+    ckpt_dir = REPO_ROOT / "run_outputs" / "test_start_himem_server" / tmp_path.name / "ckpt"
+    ckpt_dir.mkdir(parents=True, exist_ok=True)
     (ckpt_dir / "config.json").write_text(json.dumps(valid_checkpoint_config()))
     (ckpt_dir / "norm_stats.json").write_text(json.dumps(valid_norm_stats()))
     (ckpt_dir / "mp_rank_00_model_states.pt").write_bytes(b"checkpoint")
@@ -39,9 +39,10 @@ def make_valid_checkpoint(tmp_path: Path) -> Path:
 
 
 def run_script(ckpt_dir: Path, *, skip_preflight: bool = False) -> subprocess.CompletedProcess[str]:
+    ckpt_arg = ckpt_dir.relative_to(REPO_ROOT).as_posix()
     env = {
         **os.environ,
-        "HIMEM_PYTHON": "/bin/echo",
+        "HIMEM_PYTHON": "echo",
         "HIMEM_PREFLIGHT_PYTHON": sys.executable,
         "HIMEM_DEVICE": "cpu",
         "HIMEM_PORT": "9010",
@@ -49,7 +50,7 @@ def run_script(ckpt_dir: Path, *, skip_preflight: bool = False) -> subprocess.Co
     if skip_preflight:
         env["HIMEM_SKIP_PREFLIGHT"] = "1"
     return subprocess.run(
-        ["bash", str(SCRIPT), str(ckpt_dir)],
+        ["bash", str(SCRIPT), ckpt_arg],
         cwd=REPO_ROOT,
         env=env,
         text=True,
@@ -67,13 +68,13 @@ def test_start_script_runs_checkpoint_preflight_before_server_exec(tmp_path):
     assert "[OK] checkpoint:" in result.stdout
     assert "scripts/himem_server.py" in result.stdout
     assert "--ckpt_dir" in result.stdout
-    assert str(ckpt_dir) in result.stdout
+    assert ckpt_dir.relative_to(REPO_ROOT).as_posix() in result.stdout
     assert "--device cpu" in result.stdout
 
 
 def test_start_script_can_skip_preflight_for_debugging(tmp_path):
-    ckpt_dir = tmp_path / "empty-ckpt"
-    ckpt_dir.mkdir()
+    ckpt_dir = REPO_ROOT / "run_outputs" / "test_start_himem_server" / tmp_path.name / "empty-ckpt"
+    ckpt_dir.mkdir(parents=True, exist_ok=True)
 
     result = run_script(ckpt_dir, skip_preflight=True)
 
@@ -83,8 +84,8 @@ def test_start_script_can_skip_preflight_for_debugging(tmp_path):
 
 
 def test_start_script_fails_when_preflight_rejects_checkpoint(tmp_path):
-    ckpt_dir = tmp_path / "bad-ckpt"
-    ckpt_dir.mkdir()
+    ckpt_dir = REPO_ROOT / "run_outputs" / "test_start_himem_server" / tmp_path.name / "bad-ckpt"
+    ckpt_dir.mkdir(parents=True, exist_ok=True)
 
     result = run_script(ckpt_dir)
 

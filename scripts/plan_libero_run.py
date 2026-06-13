@@ -3,12 +3,18 @@ from __future__ import annotations
 
 import argparse
 from dataclasses import dataclass
+import os
 from pathlib import Path
 import shlex
+import sys
 from typing import Sequence
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+
+from himem_bridge_vla.path_utils import normalize_project_relative_path  # noqa: E402
 
 
 @dataclass(frozen=True)
@@ -57,6 +63,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 
 
 def main(argv: list[str] | None = None) -> int:
+    os.chdir(REPO_ROOT)
     args = parse_args(argv)
     plan = build_plan(args)
     write_plan(plan)
@@ -252,10 +259,7 @@ def _command(parts: Sequence[str]) -> str:
 
 
 def _resolve_path(value: str | Path) -> Path:
-    path = Path(value).expanduser()
-    if not path.is_absolute():
-        path = REPO_ROOT / path
-    return path.resolve()
+    return Path(normalize_project_relative_path(value, REPO_ROOT))
 
 
 def _rate(value: str) -> float:

@@ -22,24 +22,30 @@ find_conda() {
     return
   fi
 
-  for candidate in /root/miniconda3/bin/conda /root/autodl-tmp/miniforge3/bin/conda "$HOME/miniconda3/bin/conda" "$HOME/miniforge3/bin/conda"; do
+  for candidate in "$HOME/miniconda3/bin/conda" "$HOME/miniforge3/bin/conda"; do
     if [ -x "$candidate" ]; then
       printf '%s\n' "$candidate"
       return
     fi
   done
 
-  fail "conda was not found. Set CONDA_BIN=/path/to/conda."
+  fail "conda was not found. Set CONDA_BIN to your conda executable."
 }
 
 default_data_root() {
   if [ -n "${HIMEM_DATA_ROOT:-}" ]; then
     printf '%s\n' "$HIMEM_DATA_ROOT"
-  elif [ -d /root/autodl-tmp ] && [ -w /root/autodl-tmp ]; then
-    printf '%s\n' /root/autodl-tmp
   else
-    printf '%s\n' "$PWD/.himem-data"
+    printf '%s\n' "run_outputs/libero_data"
   fi
+}
+
+require_project_relative() {
+  local name=$1
+  local value=$2
+  case "$value" in
+    /*) fail "$name must be project-relative: $value" ;;
+  esac
 }
 
 write_libero_config() {
@@ -179,16 +185,18 @@ main() {
   local script_dir repo_root data_root conda_bin env_prefix python_bin assets_dir datasets_dir libero_root requirements_file
   script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
   repo_root="$(cd "$script_dir/.." && pwd)"
+  cd "$repo_root"
   data_root="$(default_data_root)"
+  require_project_relative "HIMEM_DATA_ROOT" "$data_root"
   env_prefix="${LIBERO_ENV_PREFIX:-$data_root/envs/libero}"
   assets_dir="${LIBERO_ASSETS_DIR:-$data_root/libero/assets}"
   datasets_dir="${LIBERO_DATASETS_DIR:-$data_root/libero/datasets}"
-  requirements_file="${HIMEM_LIBERO_REQUIREMENTS:-$repo_root/requirements-libero.txt}"
+  requirements_file="${HIMEM_LIBERO_REQUIREMENTS:-requirements-libero.txt}"
 
-  case "$requirements_file" in
-    /*) ;;
-    *) requirements_file="$repo_root/$requirements_file" ;;
-  esac
+  require_project_relative "LIBERO_ENV_PREFIX" "$env_prefix"
+  require_project_relative "LIBERO_ASSETS_DIR" "$assets_dir"
+  require_project_relative "LIBERO_DATASETS_DIR" "$datasets_dir"
+  require_project_relative "HIMEM_LIBERO_REQUIREMENTS" "$requirements_file"
   [ -f "$requirements_file" ] || fail "LIBERO requirements file not found: $requirements_file"
 
   if [ "${HIMEM_SETUP_LIBERO_DRY_RUN:-0}" = "1" ]; then

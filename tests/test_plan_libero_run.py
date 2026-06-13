@@ -22,21 +22,22 @@ def load_plan_module():
 
 
 def test_plan_libero_run_writes_eval_plan(tmp_path: Path):
-    output = tmp_path / "run_plan.md"
+    output = f"run_outputs/test_plan_libero_run/{tmp_path.name}/run_plan.md"
+    run_dir = f"run_outputs/test_plan_libero_run/{tmp_path.name}/run"
     result = subprocess.run(
         [
-            "python3",
+            sys.executable,
             str(SCRIPT),
             "--run-dir",
-            str(tmp_path / "run"),
+            run_dir,
             "--checkpoint",
-            "/tmp/checkpoints/HiMem_LIBERO",
+            "checkpoints/HiMem_LIBERO",
             "--output",
-            str(output),
+            output,
             "--server-python",
-            "/envs/himem/bin/python",
+            ".venv/bin/python",
             "--libero-python",
-            "/envs/libero/bin/python",
+            "run_outputs/libero_data/envs/libero/bin/python",
             "--min-success-rate",
             "0.1",
             "--min-total-episodes",
@@ -49,13 +50,14 @@ def test_plan_libero_run_writes_eval_plan(tmp_path: Path):
     )
 
     assert result.returncode == 0, result.stderr
-    assert result.stdout.strip() == str(output)
-    plan = output.read_text()
+    assert result.stdout.strip() == output
+    plan = (REPO_ROOT / output).read_text()
     assert "scripts/start_himem_server.sh" in plan
     assert "scripts/run_libero_eval.sh" in plan
     assert "scripts/preflight.py" in plan
     assert "scripts/report_libero_runs.py" in plan
-    assert "HIMEM_CKPT_DIR=/tmp/checkpoints/HiMem_LIBERO" in plan
+    assert "HIMEM_CKPT_DIR=" in plan
+    assert "checkpoints/HiMem_LIBERO" in plan
     assert "HIMEM_LIBERO_PROFILE=" in plan
     assert "--min-success-rate 0.1" in plan
     assert "--min-total-episodes 10" in plan
@@ -68,9 +70,9 @@ def test_plan_libero_run_can_plan_smoke(tmp_path: Path):
             "--kind",
             "smoke",
             "--run-dir",
-            str(tmp_path / "run"),
+            f"run_outputs/test_plan_libero_run/{tmp_path.name}/run",
             "--checkpoint",
-            "/tmp/checkpoints/HiMem_LIBERO",
+            "checkpoints/HiMem_LIBERO",
             "--profile",
             "configs/libero_profiles/smoke.env",
         ]
@@ -82,19 +84,20 @@ def test_plan_libero_run_can_plan_smoke(tmp_path: Path):
 
 
 def test_plan_libero_run_includes_baseline_regression_gate(tmp_path: Path):
-    output = tmp_path / "run_plan.md"
+    output = f"run_outputs/test_plan_libero_run/{tmp_path.name}/run_plan.md"
+    run_dir = f"run_outputs/test_plan_libero_run/{tmp_path.name}/run"
     result = subprocess.run(
         [
-            "python3",
+            sys.executable,
             str(SCRIPT),
             "--run-dir",
-            str(tmp_path / "run"),
+            run_dir,
             "--checkpoint",
-            "/tmp/checkpoints/HiMem_LIBERO",
+            "checkpoints/HiMem_LIBERO",
             "--output",
-            str(output),
+            output,
             "--baseline",
-            "/tmp/baseline",
+            "run_outputs/baseline",
             "--max-regression",
             "0.02",
         ],
@@ -105,20 +108,21 @@ def test_plan_libero_run_includes_baseline_regression_gate(tmp_path: Path):
     )
 
     assert result.returncode == 0, result.stderr
-    plan = output.read_text()
-    assert "--baseline /tmp/baseline" in plan
+    plan = (REPO_ROOT / output).read_text()
+    assert "--baseline" in plan
+    assert "run_outputs/baseline" in plan
     assert "--max-regression 0.02" in plan
 
 
 def test_plan_libero_run_rejects_invalid_port(tmp_path: Path):
     result = subprocess.run(
         [
-            "python3",
+            sys.executable,
             str(SCRIPT),
             "--run-dir",
-            str(tmp_path / "run"),
+            f"run_outputs/test_plan_libero_run/{tmp_path.name}/run",
             "--checkpoint",
-            "/tmp/checkpoints/HiMem_LIBERO",
+            "checkpoints/HiMem_LIBERO",
             "--port",
             "70000",
         ],

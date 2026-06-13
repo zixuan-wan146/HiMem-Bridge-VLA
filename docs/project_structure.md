@@ -10,6 +10,7 @@ configs/
   bridge_himem/
     base.yaml              Bridge-HiMem 共享默认值
     experiments/*.yaml     只写实验差异，使用 extends 继承 base
+  training/*.yaml          训练 profile，集中保存超参和 checked-in 输入配置
   datasets/*.yaml          训练数据配置
   deepspeed/*.json         DeepSpeed 配置
   libero_profiles/*.env    LIBERO smoke/full-eval 环境 profile
@@ -25,7 +26,6 @@ himem_bridge_vla/
 
 evaluations/libero/         LIBERO client、action 协议、result summary
 evaluations/calvin/         CALVIN client、action 协议、result summary
-evaluations/metaworld/      legacy MetaWorld client
 scripts/                   train/server/repo gate、preflight、下载、评估编排、报告工具
 tests/                     轻量单测，不下载模型权重
 docs/                      设计说明和工程约定
@@ -35,6 +35,7 @@ docs/                      设计说明和工程约定
 
 - 新实验只能新增 `configs/bridge_himem/experiments/*.yaml`，不要在 `himem_bridge_vla/model` 里写死实验参数。
 - 共享默认值只改 `configs/bridge_himem/base.yaml`。
+- 训练入口优先使用 `configs/training/*.yaml`，命令行只覆盖机器相关路径或一次性 ablation。
 - A/B clean 实验必须共享 memory writer、segment accumulator、VLM raw layers 和 action head 设置。
 - `bridge.variant` 和 `memory.placement` 必须一致；这由 `BridgeHiMemConfig.validate()` 强制检查。
 - 修改 YAML 后先跑：
@@ -48,7 +49,8 @@ python3 scripts/validate_bridge_himem_configs.py
 每次训练启动后，`save_dir` 会写：
 
 - `resolved_config.json`：CLI + YAML `extends` 合并后的最终配置。
-- `reproducibility.json`：命令、cwd、Python、平台、git commit/branch/dirty、seed、实验名。
+- `environment.json`：Python、关键包版本、torch/CUDA 信息和白名单环境变量。
+- `reproducibility.json`：命令、cwd、Python、平台、git commit/branch/dirty、seed、实验名和环境摘要。
 
 复现实验时不要只看原始 YAML，因为 CLI 可能覆盖 seed、device、batch size、save_dir 等字段。
 应以 run 目录里的 `resolved_config.json` 为准。
@@ -57,10 +59,9 @@ python3 scripts/validate_bridge_himem_configs.py
 
 ```bash
 python scripts/train.py \
-  --dataset_config_path configs/datasets/simulation.yaml \
-  --bridge_himem_config configs/bridge_himem/experiments/crosskv_clean.yaml \
+  --config configs/training/calvin_stage2.yaml \
   --seed 42 \
-  --save_dir /root/autodl-tmp/himem_runs/crosskv_clean_seed42
+  --save_dir run_outputs/himem_runs/crosskv_clean_seed42
 ```
 
 需要更强复现时加 `--deterministic`。这会更慢，并且某些 CUDA kernel 仍可能有环境差异。

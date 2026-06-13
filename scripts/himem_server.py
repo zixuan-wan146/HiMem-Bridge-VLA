@@ -6,11 +6,8 @@ import logging
 import sys
 from pathlib import Path
 
-import cv2
-import numpy as np
 import torch
 import websockets
-from PIL import Image
 from torchvision import transforms
 
 
@@ -26,7 +23,8 @@ from himem_bridge_vla.runtime_config import (
     IMAGE_SIZE,
     TARGET_STATE_DIM,
 )
-from himem_bridge_vla.server_protocol import validate_inference_request
+from himem_bridge_vla.image_preprocessing import rgb_array_to_pil
+from himem_bridge_vla.server_protocol import checkpoint_normalizer_dim, validate_inference_request
 from himem_bridge_vla.model.himem_bridge_vla import HiMemBridgeVLA
 from himem_bridge_vla.utils.normalization import NormalizationStats
 
@@ -66,14 +64,12 @@ def load_model_and_normalizer(ckpt_dir, device: str = "cuda", inference_steps: i
     model.load_state_dict(state_dict, strict=True)
     model = model.to(device)
 
-    return model, NormalizationStats(stats)
+    normalizer_dim = checkpoint_normalizer_dim(config)
+    return model, NormalizationStats(stats, target_dim=normalizer_dim)
 
 
 def decode_image_from_list(img_list, device) -> torch.Tensor:
-    img_array = np.array(img_list, dtype=np.uint8)
-    img = cv2.resize(img_array, (IMAGE_SIZE, IMAGE_SIZE))
-    img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
-    pil = Image.fromarray(img)
+    pil = rgb_array_to_pil(img_list, IMAGE_SIZE)
     return transforms.ToTensor()(pil).to(device)
 
 
@@ -90,7 +86,14 @@ def pad_state_tensor(state: torch.Tensor, target_dim: int = TARGET_STATE_DIM) ->
 
 def infer_from_json_dict(data: dict, model, normalizer):
     device = next(model.parameters()).device
-    request = validate_inference_request(data)
+    model_state_dim = int(model.config.get("state_dim", TARGET_STATE_DIM))
+    model_action_dim = int(getattr(model, "per_action_dim", model.config.get("per_action_dim", TARGET_STATE_DIM)))
+    request = validate_inference_request(
+        data,
+        target_state_dim=model_state_dim,
+        target_action_dim=model_action_dim,
+        max_action_mask_dim=TARGET_STATE_DIM,
+    )
 
     images = [decode_image_from_list(img, device) for img in request["image"]]
     for img in images:
@@ -99,7 +102,7 @@ def infer_from_json_dict(data: dict, model, normalizer):
             raise ValueError(f"image_size must be {expected_shape}, got {tuple(img.shape)}")
 
     state = torch.tensor(request["state"], dtype=torch.float32, device=device)
-    norm_state = normalizer.normalize_state(pad_state_tensor(state)).to(dtype=torch.float32)
+    norm_state = normalizer.normalize_state(pad_state_tensor(state, target_dim=model_state_dim)).to(dtype=torch.float32)
 
     prompt = request["prompt"]
     image_mask = torch.tensor(request["image_mask"], dtype=torch.int32, device=device)
@@ -120,7 +123,9 @@ def infer_from_json_dict(data: dict, model, normalizer):
             episode_id=request["episode_id"],
             reset_memory=request["reset_memory"],
         )
-        action = action.reshape(1, -1, TARGET_STATE_DIM)
+        if action.numel() % model_action_dim != 0:
+            raise ValueError(f"Model returned {action.numel()} action values, not divisible by per_action_dim={model_action_dim}")
+        action = action.reshape(1, -1, model_action_dim)
         action = normalizer.denormalize_action(action[0])
         return action.cpu().numpy().tolist()
 

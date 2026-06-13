@@ -17,7 +17,10 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 REPO_ROOT = SCRIPT_DIR.parent
 if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
 
+from himem_bridge_vla.path_utils import display_project_path, project_path  # noqa: E402
 from plan_libero_run import build_plan_from_values, format_plan  # noqa: E402
 
 
@@ -75,6 +78,8 @@ def main(argv: list[str] | None = None) -> int:
 
 
 def create_experiment(args: argparse.Namespace) -> dict[str, Any]:
+    _validate_executable_ref(args.server_python, "--server-python")
+    _validate_executable_ref(args.libero_python, "--libero-python")
     root = _resolve_path(args.root)
     experiment_dir = root / args.name
     run_dir = experiment_dir / "run"
@@ -87,12 +92,18 @@ def create_experiment(args: argparse.Namespace) -> dict[str, Any]:
     manifest_path = experiment_dir / "experiment_manifest.json"
 
     if not source_profile.is_file():
-        raise FileNotFoundError(f"LIBERO profile does not exist: {source_profile}")
+        raise FileNotFoundError(f"LIBERO profile does not exist: {display_project_path(source_profile, REPO_ROOT)}")
     if experiment_dir.exists():
         if not experiment_dir.is_dir():
-            raise FileExistsError(f"experiment path already exists and is not a directory: {experiment_dir}")
+            raise FileExistsError(
+                "experiment path already exists and is not a directory: "
+                f"{display_project_path(experiment_dir, REPO_ROOT)}"
+            )
         if any(experiment_dir.iterdir()):
-            raise FileExistsError(f"experiment directory already exists and is not empty: {experiment_dir}")
+            raise FileExistsError(
+                "experiment directory already exists and is not empty: "
+                f"{display_project_path(experiment_dir, REPO_ROOT)}"
+            )
 
     plan = build_plan_from_values(
         kind=args.kind,
@@ -157,15 +168,15 @@ def _manifest(
         "created_at_utc": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
         "kind": args.kind,
         "paths": {
-            "experiment_dir": str(experiment_dir),
-            "run_dir": str(run_dir),
-            "report_dir": str(report_dir),
-            "checkpoint": str(checkpoint),
-            "source_profile": str(source_profile),
-            "profile_snapshot": str(profile_snapshot),
-            "run_plan": str(run_plan_path),
-            "notes": str(notes_path),
-            "experiment_manifest": str(manifest_path),
+            "experiment_dir": display_project_path(experiment_dir, REPO_ROOT),
+            "run_dir": display_project_path(run_dir, REPO_ROOT),
+            "report_dir": display_project_path(report_dir, REPO_ROOT),
+            "checkpoint": display_project_path(checkpoint, REPO_ROOT),
+            "source_profile": display_project_path(source_profile, REPO_ROOT),
+            "profile_snapshot": display_project_path(profile_snapshot, REPO_ROOT),
+            "run_plan": display_project_path(run_plan_path, REPO_ROOT),
+            "notes": display_project_path(notes_path, REPO_ROOT),
+            "experiment_manifest": display_project_path(manifest_path, REPO_ROOT),
         },
         "gate": {
             "min_success_rate": args.min_success_rate,
@@ -236,7 +247,7 @@ def _git(args: list[str], repo_root: Path) -> str:
 
 def _json_ready(value: Any) -> Any:
     if isinstance(value, Path):
-        return str(value)
+        return display_project_path(value, REPO_ROOT)
     if isinstance(value, tuple):
         return [_json_ready(item) for item in value]
     if isinstance(value, list):
@@ -247,10 +258,13 @@ def _json_ready(value: Any) -> Any:
 
 
 def _resolve_path(value: str | Path) -> Path:
+    return project_path(value, REPO_ROOT)
+
+
+def _validate_executable_ref(value: str, label: str) -> None:
     path = Path(value).expanduser()
-    if not path.is_absolute():
-        path = REPO_ROOT / path
-    return path.resolve()
+    if path.is_absolute():
+        raise ValueError(f"{label} must be a command name or project-relative path, got {value!r}")
 
 
 def _experiment_name(value: str) -> str:

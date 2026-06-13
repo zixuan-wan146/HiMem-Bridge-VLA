@@ -4,10 +4,10 @@ max_state_dim: 24
 max_views: 3
 
 data_groups:
-  # Example simulation dataset. Relative paths are resolved from
-  # --dataset_config_base_dir, which defaults to the repository root.
-  metaworld_sawyer:
-    HiMem_MetaWorld:
-      path: HiMem_training_dataset/HiMem_MetaWorld_Dataset
+  # Generic LeRobot-style simulation example. Replace this path and view_map
+  # with the dataset you actually train on.
+  custom_sim:
+    CustomSimulation:
+      path: datasets/custom_sim/lerobot
       view_map:
         image_1: observation.images.image

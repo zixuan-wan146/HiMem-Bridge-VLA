@@ -68,20 +68,18 @@ def test_run_libero_eval_script_preserves_explicit_overrides():
     assert env["HIMEM_LIBERO_RESULT_FILE"].endswith("custom_eval_results.json")
 
 
-def test_run_libero_eval_script_can_group_outputs_under_run_dir(tmp_path):
-    run_dir = tmp_path / "libero_eval_run"
-    result = run_eval_script({"HIMEM_LIBERO_RUN_DIR": str(run_dir)})
+def test_run_libero_eval_script_can_group_outputs_under_run_dir():
+    run_dir = "run_outputs/libero_eval_run"
+    result = run_eval_script({"HIMEM_LIBERO_RUN_DIR": run_dir})
 
     assert result.returncode == 0
     env = parse_env_output(result.stdout)
-    assert env["HIMEM_LIBERO_RUN_DIR"] == str(run_dir)
-    assert env["HIMEM_LIBERO_LOG_DIR"] == str(run_dir / "logs")
-    assert env["HIMEM_LIBERO_VIDEO_DIR"] == str(run_dir / "videos")
-    assert env["HIMEM_LIBERO_LOG_FILE"] == str(run_dir / "logs" / "HiMem_libero_eval.txt")
-    assert env["HIMEM_LIBERO_RESULT_FILE"] == str(
-        run_dir / "results" / "HiMem_libero_eval_results.json"
-    )
-    assert env["HIMEM_LIBERO_MANIFEST_FILE"] == str(run_dir / "run_manifest.json")
+    assert env["HIMEM_LIBERO_RUN_DIR"] == run_dir
+    assert env["HIMEM_LIBERO_LOG_DIR"] == f"{run_dir}/logs"
+    assert env["HIMEM_LIBERO_VIDEO_DIR"] == f"{run_dir}/videos"
+    assert env["HIMEM_LIBERO_LOG_FILE"] == f"{run_dir}/logs/HiMem_libero_eval.txt"
+    assert env["HIMEM_LIBERO_RESULT_FILE"] == f"{run_dir}/results/HiMem_libero_eval_results.json"
+    assert env["HIMEM_LIBERO_MANIFEST_FILE"] == f"{run_dir}/run_manifest.json"
 
 
 def test_run_libero_eval_script_loads_repo_relative_profile():
@@ -89,7 +87,7 @@ def test_run_libero_eval_script_loads_repo_relative_profile():
 
     assert result.returncode == 0, result.stderr
     env = parse_env_output(result.stdout)
-    assert env["HIMEM_LIBERO_PROFILE"] == str(REPO_ROOT / "configs" / "libero_profiles" / "smoke.env")
+    assert env["HIMEM_LIBERO_PROFILE"] == "configs/libero_profiles/smoke.env"
     assert env["HIMEM_LIBERO_EPISODES"] == "1"
     assert env["HIMEM_LIBERO_TASK_SUITES"] == "libero_spatial"
     assert env["HIMEM_LIBERO_CKPT_NAME"] == "HiMem_libero_smoke"

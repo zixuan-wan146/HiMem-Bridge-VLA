@@ -5,6 +5,12 @@ from pathlib import Path
 import pytest
 
 from himem_bridge_vla.training_config import validate_training_config
+from himem_bridge_vla.training_config import (
+    default_training_config,
+    load_training_config,
+    merge_training_config,
+    resolve_training_config_paths,
+)
 
 
 def valid_config() -> dict:
@@ -79,6 +85,31 @@ def test_validate_training_config_rejects_non_positive_ints():
         )
 
 
+def test_validate_training_config_rejects_dropout_above_one():
+    config = valid_config()
+    config["dropout"] = 1.5
+
+    with pytest.raises(ValueError, match="dropout"):
+        validate_training_config(
+            config,
+            cuda_available=False,
+            path_exists=existing_paths("configs/datasets/simulation.yaml"),
+        )
+
+
+def test_validate_training_config_rejects_warmup_longer_than_training():
+    config = valid_config()
+    config["warmup_steps"] = 11
+    config["max_steps"] = 10
+
+    with pytest.raises(ValueError, match="warmup_steps"):
+        validate_training_config(
+            config,
+            cuda_available=False,
+            path_exists=existing_paths("configs/datasets/simulation.yaml"),
+        )
+
+
 def test_validate_training_config_rejects_cuda_when_unavailable():
     config = valid_config()
     config["device"] = "cuda:0"
@@ -126,4 +157,80 @@ def test_validate_training_config_requires_resume_for_resume_pretrain():
             config,
             cuda_available=False,
             path_exists=existing_paths("configs/datasets/simulation.yaml"),
+        )
+
+
+def test_training_yaml_config_merges_with_cli_overrides(tmp_path):
+    config_path = tmp_path / "train.yaml"
+    config_path.write_text(
+        "\n".join(
+            [
+                "dataset_config_path: configs/datasets/simulation.yaml",
+                "batch_size: 8",
+                "disable_swanlab: true",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    loaded = load_training_config(config_path)
+    merged = merge_training_config(
+        default_training_config(tmp_path),
+        file_config=loaded,
+        cli_overrides={"batch_size": 4},
+    )
+
+    assert merged["dataset_config_path"] == "configs/datasets/simulation.yaml"
+    assert merged["batch_size"] == 4
+    assert merged["disable_swanlab"] is True
+
+
+def test_resolve_training_config_paths_keeps_dataset_paths_project_relative(tmp_path, monkeypatch):
+    repo_root = tmp_path / "repo"
+    repo_root.mkdir()
+    workdir = tmp_path / "outside"
+    workdir.mkdir()
+    monkeypatch.chdir(workdir)
+
+    resolved = resolve_training_config_paths(
+        {
+            "dataset_config_path": "configs/datasets/simulation.yaml",
+            "dataset_config_base_dir": ".",
+        },
+        repo_root,
+    )
+
+    assert resolved["dataset_config_path"] == "configs/datasets/simulation.yaml"
+    assert resolved["dataset_config_base_dir"] == "."
+
+
+def test_resolve_training_config_paths_keeps_outputs_project_relative(tmp_path, monkeypatch):
+    repo_root = tmp_path / "repo"
+    repo_root.mkdir()
+    workdir = tmp_path / "outside"
+    workdir.mkdir()
+    monkeypatch.chdir(workdir)
+
+    resolved = resolve_training_config_paths(
+        {
+            "save_dir": "run_outputs/training/calvin_stage1",
+            "cache_dir": "checkpoints/cache",
+        },
+        repo_root,
+    )
+
+    assert resolved["save_dir"] == "run_outputs/training/calvin_stage1"
+    assert resolved["cache_dir"] == "checkpoints/cache"
+
+
+def test_resolve_training_config_paths_rejects_absolute_paths(tmp_path):
+    repo_root = tmp_path / "repo"
+    repo_root.mkdir()
+
+    with pytest.raises(ValueError, match="project-relative"):
+        resolve_training_config_paths(
+            {
+                "save_dir": str(tmp_path / "outside"),
+            },
+            repo_root,
         )

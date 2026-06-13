@@ -60,6 +60,55 @@ class FlowMatchingConfigTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "action_mask shape"):
             head(fused_tokens, actions_gt=actions_gt, action_mask=action_mask)
 
+    def test_single_step_action_head_registers_projection_before_forward(self):
+        torch = self._import_or_skip("torch")
+        flow_matching = self._import_or_skip("himem_bridge_vla.model.action_head.flow_matching")
+
+        head = flow_matching.FlowmatchingActionHead(
+            embed_dim=8,
+            hidden_dim=16,
+            action_dim=3,
+            horizon=1,
+            per_action_dim=3,
+            num_heads=2,
+            num_layers=1,
+            num_inference_timesteps=1,
+        )
+
+        param_names_before = set(dict(head.named_parameters()))
+        self.assertIn("single_action_proj.weight", param_names_before)
+
+        fused_tokens = torch.zeros(2, 1, 8)
+        actions_gt = torch.zeros(2, 1, 3)
+        action_mask = torch.ones(2, 1, 3)
+        pred_velocity, noise = head(fused_tokens, actions_gt=actions_gt, action_mask=action_mask)
+
+        self.assertEqual(tuple(pred_velocity.shape), (2, 3))
+        self.assertEqual(tuple(noise.shape), (2, 1, 3))
+        self.assertEqual(set(dict(head.named_parameters())), param_names_before)
+
+    def test_inference_keeps_masked_action_dimensions_zero_after_final_step(self):
+        torch = self._import_or_skip("torch")
+        flow_matching = self._import_or_skip("himem_bridge_vla.model.action_head.flow_matching")
+
+        torch.manual_seed(0)
+        head = flow_matching.FlowmatchingActionHead(
+            embed_dim=8,
+            hidden_dim=16,
+            action_dim=6,
+            horizon=2,
+            per_action_dim=3,
+            num_heads=2,
+            num_layers=1,
+            num_inference_timesteps=2,
+        )
+        fused_tokens = torch.zeros(1, 1, 8)
+        action_mask = torch.tensor([[1.0, 0.0, 1.0]])
+
+        action = head.get_action(fused_tokens, action_mask=action_mask).view(1, 2, 3)
+
+        self.assertTrue(torch.equal(action[:, :, 1], torch.zeros_like(action[:, :, 1])))
+
     def _import_or_skip(self, module_name):
         try:
             return __import__(module_name, fromlist=["*"])

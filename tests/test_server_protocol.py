@@ -4,7 +4,12 @@ import math
 
 import pytest
 
-from himem_bridge_vla.server_protocol import normalize_binary_mask, validate_inference_request
+from himem_bridge_vla.server_protocol import (
+    checkpoint_normalizer_dim,
+    normalize_action_mask,
+    normalize_binary_mask,
+    validate_inference_request,
+)
 
 
 def tiny_rgb_image(value: int = 0):
@@ -47,6 +52,17 @@ def test_validate_inference_request_accepts_optional_memory_fields():
     assert request["episode_id"] == "123"
     assert request["reset_memory"] is True
     assert request["return_debug"] is True
+
+
+def test_validate_inference_request_accepts_zero_padded_action_mask_for_smaller_model_dim():
+    payload = valid_request()
+    payload["state"] = [0.1, 0.2, 0.3]
+    payload["action_mask"] = [1, 1, 1, 0, 0, 0]
+
+    request = validate_inference_request(payload, target_state_dim=3, target_action_dim=3, max_action_mask_dim=6)
+
+    assert request["state"] == pytest.approx([0.1, 0.2, 0.3])
+    assert request["action_mask"] == [1, 1, 1]
 
 
 def test_validate_inference_request_rejects_missing_required_fields():
@@ -113,3 +129,19 @@ def test_normalize_binary_mask_rejects_nonbinary_values():
 def test_normalize_binary_mask_rejects_overlong_masks():
     with pytest.raises(ValueError, match="exceeds target dimension"):
         normalize_binary_mask([1, 0, 1], 2, "image_mask")
+
+
+def test_normalize_action_mask_rejects_active_dims_beyond_model_dim():
+    with pytest.raises(ValueError, match="beyond model action dimension"):
+        normalize_action_mask([1, 1, 1, 0, 1], target_action_dim=3, max_action_mask_dim=6)
+
+
+def test_checkpoint_normalizer_dim_tracks_checkpoint_state_and_action_dims():
+    assert checkpoint_normalizer_dim({"state_dim": 7, "per_action_dim": 7}) == 7
+    assert checkpoint_normalizer_dim({"state_dim": 8, "per_action_dim": 7}) == 8
+    assert checkpoint_normalizer_dim({"state_dim": 7, "per_action_dim": 9}) == 9
+
+
+def test_checkpoint_normalizer_dim_falls_back_for_missing_or_invalid_values():
+    assert checkpoint_normalizer_dim({}) == 24
+    assert checkpoint_normalizer_dim({"state_dim": 0, "per_action_dim": "bad"}) == 24

@@ -33,6 +33,30 @@ check_shell_syntax() {
   done < <(find scripts -name "*.sh" -print0)
 }
 
+find_python() {
+  if [ -n "${PYTHON:-}" ]; then
+    if command -v "$PYTHON" >/dev/null 2>&1 || [ -x "$PYTHON" ]; then
+      printf '%s\n' "$PYTHON"
+      return
+    fi
+    log "ERROR: PYTHON is not executable: $PYTHON"
+    exit 1
+  fi
+
+  if command -v python3 >/dev/null 2>&1; then
+    printf '%s\n' "python3"
+    return
+  fi
+
+  if command -v python >/dev/null 2>&1; then
+    printf '%s\n' "python"
+    return
+  fi
+
+  log "ERROR: no Python interpreter found; set PYTHON to the interpreter for this project"
+  exit 1
+}
+
 run_ruff() {
   if [ "${HIMEM_CHECK_SKIP_RUFF:-0}" = "1" ]; then
     log "Skipping ruff because HIMEM_CHECK_SKIP_RUFF=1"
@@ -59,11 +83,12 @@ run_ruff() {
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 repo_root="$(cd "$script_dir/.." && pwd)"
-python_bin="${PYTHON:-python3}"
+python_bin="$(find_python)"
 
 cd "$repo_root"
 
 run_step "Requirements policy audit" "$python_bin" scripts/audit_requirements.py
+run_step "Runtime environment check" "$python_bin" scripts/check_runtime_environment.py
 
 if [ "${HIMEM_CHECK_SKIP_PYTEST:-0}" = "1" ]; then
   log "Skipping pytest because HIMEM_CHECK_SKIP_PYTEST=1"
@@ -75,29 +100,30 @@ run_ruff
 check_shell_syntax
 run_step "Repository preflight" "$python_bin" scripts/preflight.py
 run_step "Bridge-HiMem config validation" "$python_bin" scripts/validate_bridge_himem_configs.py
-run_step "LIBERO setup dry-run" env HIMEM_SETUP_LIBERO_DRY_RUN=1 "$script_dir/setup_libero_env.sh"
+run_step "Training config validation" "$python_bin" scripts/validate_training_configs.py
+run_step "LIBERO setup dry-run" env HIMEM_SETUP_LIBERO_DRY_RUN=1 scripts/setup_libero_env.sh
 run_step \
   "LIBERO checkpoint download dry-run" \
-  env HIMEM_DOWNLOAD_LIBERO_CHECKPOINT_DRY_RUN=1 "$script_dir/download_libero_checkpoint.sh"
+  env HIMEM_DOWNLOAD_LIBERO_CHECKPOINT_DRY_RUN=1 scripts/download_libero_checkpoint.sh
 run_step \
   "LIBERO smoke profile dry-run" \
   env HIMEM_LIBERO_DRY_RUN=1 HIMEM_LIBERO_PROFILE=configs/libero_profiles/smoke.env \
-  "$script_dir/run_libero_smoke.sh"
+  scripts/run_libero_smoke.sh
 run_step \
   "LIBERO eval profile dry-run" \
   env HIMEM_LIBERO_DRY_RUN=1 HIMEM_LIBERO_PROFILE=configs/libero_profiles/full_eval.env \
-  "$script_dir/run_libero_eval.sh"
+  scripts/run_libero_eval.sh
 run_step \
   "CALVIN eval profile dry-run" \
   env HIMEM_CALVIN_DRY_RUN=1 HIMEM_CALVIN_PROFILE=configs/calvin_profiles/full_eval.env \
-  "$script_dir/run_calvin_eval.sh"
+  scripts/run_calvin_eval.sh
 run_step \
   "LIBERO experiment init dry-run" \
-  "$python_bin" "$script_dir/init_libero_experiment.py" \
+  "$python_bin" scripts/init_libero_experiment.py \
   --dry-run \
   --name check_repo_smoke \
-  --root /tmp/himem_check_experiments \
-  --checkpoint /tmp/HiMem_LIBERO \
+  --root run_outputs/check_repo_experiments \
+  --checkpoint run_outputs/check_repo_checkpoints/HiMem_LIBERO \
   --profile configs/libero_profiles/smoke.env \
   --kind smoke
 
@@ -106,7 +132,7 @@ if [ "${HIMEM_CHECK_SKIP_COMPILE:-0}" = "1" ]; then
 else
   run_step \
     "Python compileall" \
-    env PYTHONPYCACHEPREFIX="${PYTHONPYCACHEPREFIX:-/tmp/himem_pycache}" \
+    env PYTHONPYCACHEPREFIX="${PYTHONPYCACHEPREFIX:-run_outputs/pycache}" \
     "$python_bin" -m compileall -q himem_bridge_vla evaluations scripts tests
 fi
 

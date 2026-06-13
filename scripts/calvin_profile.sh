@@ -37,6 +37,7 @@ calvin_profile_allowed_key() {
 load_calvin_profile() {
   local repo_root=$1
   local profile=${HIMEM_CALVIN_PROFILE:-}
+  local profile_path
   local line key value
 
   if [ -z "$profile" ]; then
@@ -44,11 +45,14 @@ load_calvin_profile() {
   fi
 
   case "$profile" in
-    /*) ;;
-    *) profile="$repo_root/$profile" ;;
+    /*)
+      printf '[calvin-profile] ERROR: HIMEM_CALVIN_PROFILE must be project-relative: %s\n' "$profile" >&2
+      return 1
+      ;;
   esac
+  profile_path="$repo_root/$profile"
 
-  if [ ! -f "$profile" ]; then
+  if [ ! -f "$profile_path" ]; then
     printf '[calvin-profile] ERROR: profile file does not exist: %s\n' "$profile" >&2
     return 1
   fi
@@ -74,7 +78,7 @@ load_calvin_profile() {
     if [ -z "${!key+x}" ]; then
       export "$key=$value"
     fi
-  done < "$profile"
+  done < "$profile_path"
 
   export HIMEM_CALVIN_PROFILE="$profile"
 }

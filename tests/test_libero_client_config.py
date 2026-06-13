@@ -43,9 +43,9 @@ def test_server_url_prefers_shared_env_var():
 
 
 def test_result_file_can_be_overridden():
-    config = LiberoClientConfig.from_env({"HIMEM_LIBERO_RESULT_FILE": "/tmp/results.json"})
+    config = LiberoClientConfig.from_env({"HIMEM_LIBERO_RESULT_FILE": "run_outputs/results.json"})
 
-    assert config.result_file == "/tmp/results.json"
+    assert config.result_file == "run_outputs/results.json"
 
 
 def test_invalid_max_steps_count_is_rejected():

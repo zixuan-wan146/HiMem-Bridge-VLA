@@ -23,6 +23,7 @@ from himem_bridge_vla.dataset.config_utils import (  # noqa: E402
     validate_dataset_config_structure,
 )
 from himem_bridge_vla.dataset.validation import validate_configured_datasets  # noqa: E402
+from himem_bridge_vla.path_utils import display_project_path, project_path  # noqa: E402
 from himem_bridge_vla.runtime_config import TARGET_STATE_DIM  # noqa: E402
 
 
@@ -43,14 +44,15 @@ REQUIRED_REPO_FILES = (
     "evaluations/libero/libero_client_config.py",
     "evaluations/libero/libero_eval_summary.py",
     "evaluations/libero/libero_client_4tasks.py",
-    "evaluations/metaworld/mt50_himem_client_prompt.py",
     "evaluations/calvin/calvin_action_protocol.py",
     "evaluations/calvin/calvin_client_config.py",
     "evaluations/calvin/calvin_eval_summary.py",
     "evaluations/calvin/calvin_client.py",
     "scripts/preflight.py",
     "scripts/audit_requirements.py",
+    "scripts/check_runtime_environment.py",
     "scripts/check_repo.sh",
+    "scripts/validate_training_configs.py",
     "scripts/libero_profile.sh",
     "scripts/calvin_profile.sh",
     "scripts/download_libero_checkpoint.sh",
@@ -68,6 +70,8 @@ REQUIRED_REPO_FILES = (
     "scripts/report_libero_runs.py",
     "scripts/plan_libero_run.py",
     "scripts/init_libero_experiment.py",
+    "configs/training/calvin_stage1.yaml",
+    "configs/training/calvin_stage2.yaml",
     "configs/libero_profiles/smoke.env",
     "configs/libero_profiles/full_eval.env",
     "configs/calvin_profiles/smoke.env",
@@ -172,22 +176,19 @@ def repo_root_from_script() -> Path:
 
 
 def resolve_repo_path(repo_root: Path, value: str | Path) -> Path:
-    path = Path(value).expanduser()
-    if path.is_absolute():
-        return path
-    return (repo_root / path).resolve()
+    return project_path(value, repo_root)
 
 
 def check_repo_layout(repo_root: Path, report: Report) -> None:
     if not repo_root.exists():
-        report.fail("repo", f"repository root does not exist: {repo_root}")
+        report.fail("repo", "repository root does not exist: .")
         return
 
     missing = [path for path in REQUIRED_REPO_FILES if not (repo_root / path).exists()]
     if missing:
         report.fail("repo", f"missing required files: {', '.join(missing)}")
     else:
-        report.ok("repo", f"required files present under {repo_root}")
+        report.ok("repo", "required files present under .")
 
     git_dir = repo_root / ".git"
     if git_dir.exists():
@@ -200,7 +201,7 @@ def check_script_permissions(repo_root: Path, report: Report) -> None:
     scripts_dir = repo_root / "scripts"
     scripts = sorted(scripts_dir.glob("*.sh"))
     if not scripts:
-        report.fail("scripts", f"no shell scripts found under {scripts_dir}")
+        report.fail("scripts", f"no shell scripts found under {display_project_path(scripts_dir, repo_root)}")
         return
 
     non_executable = [str(path.relative_to(repo_root)) for path in scripts if not os.access(path, os.X_OK)]
@@ -276,7 +277,11 @@ def check_checkpoint_dir(ckpt_dir: Path, report: Report) -> None:
         report.fail("checkpoint", f"config.json: {config_error}")
         return
 
-    stats_error = validate_norm_stats(payloads["norm_stats.json"])
+    stats_error = validate_norm_stats(
+        payloads["norm_stats.json"],
+        state_dim=payloads["config.json"].get("state_dim"),
+        action_dim=payloads["config.json"].get("per_action_dim"),
+    )
     if stats_error:
         report.fail("checkpoint", f"norm_stats.json: {stats_error}")
         return
@@ -321,7 +326,13 @@ def validate_checkpoint_config(config: dict[str, Any], target_dim: int = TARGET_
     return None
 
 
-def validate_norm_stats(stats: dict[str, Any], target_dim: int = TARGET_STATE_DIM) -> str | None:
+def validate_norm_stats(
+    stats: dict[str, Any],
+    target_dim: int = TARGET_STATE_DIM,
+    *,
+    state_dim: Any = None,
+    action_dim: Any = None,
+) -> str | None:
     if len(stats) != 1:
         return f"expected one robot stats entry, got {len(stats)}"
 
@@ -329,12 +340,28 @@ def validate_norm_stats(stats: dict[str, Any], target_dim: int = TARGET_STATE_DI
     if not isinstance(robot_stats, dict):
         return f"{robot_name} stats must be an object"
 
-    for stat_name in ("observation.state", "action"):
-        stat_error = _validate_minmax_stat(robot_stats, stat_name, target_dim)
+    stat_dims = {
+        "observation.state": _configured_dim_or_target(state_dim, target_dim),
+        "action": _configured_dim_or_target(action_dim, target_dim),
+    }
+    for stat_name, max_dim in stat_dims.items():
+        stat_error = _validate_minmax_stat(robot_stats, stat_name, max_dim)
         if stat_error:
             return f"{robot_name}.{stat_error}"
 
     return None
+
+
+def _configured_dim_or_target(value: Any, target_dim: int) -> int:
+    if value is None:
+        return target_dim
+    try:
+        configured_dim = int(value)
+    except (TypeError, ValueError):
+        return target_dim
+    if configured_dim <= 0:
+        return target_dim
+    return min(configured_dim, target_dim)
 
 
 def _validate_minmax_stat(robot_stats: dict[str, Any], stat_name: str, target_dim: int) -> str | None:
@@ -371,7 +398,7 @@ def _validate_numeric_vector(value: Any, label: str, target_dim: int) -> str | N
     return None
 
 
-def load_yaml_if_available(path: Path, report: Report) -> dict[str, Any] | None:
+def load_yaml_if_available(path: Path, repo_root: Path, report: Report) -> dict[str, Any] | None:
     spec = importlib.util.find_spec("yaml")
     if spec is None:
         report.warn("dataset", "PyYAML is not installed; skipped structured dataset config validation")
@@ -383,21 +410,21 @@ def load_yaml_if_available(path: Path, report: Report) -> dict[str, Any] | None:
         with path.open("r") as f:
             loaded = yaml.safe_load(f)
     except Exception as exc:
-        report.fail("dataset", f"failed to parse dataset config {path}: {exc}")
+        report.fail("dataset", f"failed to parse dataset config {display_project_path(path, repo_root)}: {exc}")
         return None
 
     if not isinstance(loaded, dict):
-        report.fail("dataset", f"dataset config must be a mapping: {path}")
+        report.fail("dataset", f"dataset config must be a mapping: {display_project_path(path, repo_root)}")
         return None
     return loaded
 
 
-def check_dataset_config(config_path: Path, base_dir: Path, strict_data: bool, report: Report) -> None:
+def check_dataset_config(config_path: Path, base_dir: Path, strict_data: bool, report: Report, repo_root: Path) -> None:
     if not config_path.exists():
-        report.fail("dataset", f"dataset config does not exist: {config_path}")
+        report.fail("dataset", f"dataset config does not exist: {display_project_path(config_path, repo_root)}")
         return
 
-    config = load_yaml_if_available(config_path, report)
+    config = load_yaml_if_available(config_path, repo_root, report)
     if config is None:
         return
 
@@ -412,10 +439,11 @@ def check_dataset_config(config_path: Path, base_dir: Path, strict_data: bool, r
         issues = validate_configured_datasets(config, base_dir, require_videos=True)
         if issues:
             for issue in issues:
+                issue_path = display_project_path(issue.path, repo_root)
                 if issue.level == "FAIL":
-                    report.fail("dataset", f"{issue.path}: {issue.message}")
+                    report.fail("dataset", f"{issue_path}: {issue.message}")
                 else:
-                    report.warn("dataset", f"{issue.path}: {issue.message}")
+                    report.warn("dataset", f"{issue_path}: {issue.message}")
             return
         report.ok("dataset", f"dataset config describes {dataset_count} dataset(s) with valid training data")
         return
@@ -424,7 +452,7 @@ def check_dataset_config(config_path: Path, base_dir: Path, strict_data: bool, r
     for group_name, dataset_name, dataset_config in iter_dataset_entries(resolved_config):
         dataset_path = Path(str(dataset_config["path"]))
         if not dataset_path.exists():
-            missing_paths.append(f"{group_name}/{dataset_name}: {dataset_path}")
+            missing_paths.append(f"{group_name}/{dataset_name}: {display_project_path(dataset_path, repo_root)}")
             continue
 
     if missing_paths:
@@ -929,7 +957,7 @@ def _mean(values: list[int]) -> float:
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Run lightweight HiMem-Bridge-VLA repository preflight checks.")
-    parser.add_argument("--repo-root", default=str(repo_root_from_script()), help="Repository root to check.")
+    parser.add_argument("--repo-root", default=".", help="Repository root to check.")
     parser.add_argument("--checkpoint", help="Optional HiMem-Bridge-VLA checkpoint directory to validate.")
     parser.add_argument(
         "--dataset-config",
@@ -976,7 +1004,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 
 def run_preflight(args: argparse.Namespace) -> Report:
     report = Report()
-    repo_root = Path(args.repo_root).expanduser().resolve()
+    repo_root = repo_root_from_script() if args.repo_root == "." else project_path(args.repo_root, repo_root_from_script())
 
     check_repo_layout(repo_root, report)
     check_script_permissions(repo_root, report)
@@ -986,10 +1014,10 @@ def run_preflight(args: argparse.Namespace) -> Report:
     if args.dataset_config:
         dataset_config = resolve_repo_path(repo_root, args.dataset_config)
         dataset_base_dir = resolve_repo_path(repo_root, args.dataset_base_dir)
-        check_dataset_config(dataset_config, dataset_base_dir, bool(args.strict_data), report)
+        check_dataset_config(dataset_config, dataset_base_dir, bool(args.strict_data), report, repo_root)
 
     if args.checkpoint:
-        check_checkpoint_dir(Path(args.checkpoint).expanduser().resolve(), report)
+        check_checkpoint_dir(resolve_repo_path(repo_root, args.checkpoint), report)
 
     libero_result_inputs = getattr(args, "libero_result", [])
     if libero_result_inputs:

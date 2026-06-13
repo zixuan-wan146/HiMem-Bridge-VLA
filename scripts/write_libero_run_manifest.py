@@ -14,6 +14,7 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from evaluations.libero.libero_eval_summary import build_run_metadata  # noqa: E402
+from himem_bridge_vla.path_utils import sanitize_project_paths  # noqa: E402
 
 
 TRACKED_ENV_KEYS = (
@@ -63,12 +64,13 @@ def build_manifest(
 ) -> dict[str, Any]:
     environ = os.environ if environ is None else environ
     metadata = build_run_metadata(repo_root=repo_root, environ=environ, argv=argv)
+    repo_path = Path(repo_root).expanduser().resolve()
     return {
         "schema_version": 1,
         "run_kind": run_kind,
         "metadata": metadata,
         "libero": {
-            key: str(environ[key])
+            key: str(sanitize_project_paths(environ[key], repo_path))
             for key in TRACKED_ENV_KEYS
             if key in environ and environ[key] != ""
         },

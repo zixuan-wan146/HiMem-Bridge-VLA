@@ -1,12 +1,13 @@
 # CALVIN Setup for HiMem-Bridge-VLA
 
-This setup keeps CALVIN on the data disk and adapts it to the existing HiMem-Bridge-VLA
-simulation dataset loader.
+This setup keeps CALVIN paths project-relative and adapts it to the existing HiMem-Bridge-VLA
+simulation dataset loader. If the repository itself is on a data disk, these relative paths stay on
+that disk.
 
 ## Expected Paths
 
 ```bash
-/root/autodl-tmp/datasets/calvin/
+datasets/calvin/
   lerobot/task_D_D/                       # LeRobot-format CALVIN training data
   original/task_D_D/                      # optional original CALVIN data
   annotations/task_D_D_boundaries.jsonl   # generated boundary sidecar
@@ -28,8 +29,8 @@ Generate the memory/boundary sidecar from the original CALVIN annotation file:
 
 ```bash
 python scripts/prepare_calvin_boundaries.py \
-  --auto-lang-ann /root/autodl-tmp/datasets/calvin/original/task_D_D/training/lang_annotations/auto_lang_ann.npy \
-  --output /root/autodl-tmp/datasets/calvin/annotations/task_D_D_boundaries.jsonl
+  --auto-lang-ann datasets/calvin/original/task_D_D/training/lang_annotations/auto_lang_ann.npy \
+  --output datasets/calvin/annotations/task_D_D_boundaries.jsonl
 ```
 
 If using a LeRobot D-D conversion where each episode is one task segment,
@@ -37,8 +38,8 @@ generate per-episode boundaries directly from LeRobot metadata:
 
 ```bash
 python scripts/prepare_calvin_boundaries.py \
-  --lerobot-root /root/autodl-tmp/datasets/calvin/lerobot/task_D_D \
-  --output /root/autodl-tmp/datasets/calvin/annotations/task_D_D_boundaries.jsonl
+  --lerobot-root datasets/calvin/lerobot/task_D_D \
+  --output datasets/calvin/annotations/task_D_D_boundaries.jsonl
 ```
 
 The sidecar stores segment-level labels:
@@ -105,8 +106,8 @@ The eval client expects an installed CALVIN checkout with `calvin_models/conf` a
 ABC->D validation dataset. By default it looks under:
 
 ```bash
-HIMEM_CALVIN_ROOT=/root/autodl-tmp/calvin
-HIMEM_CALVIN_DATASET_PATH=/root/autodl-tmp/calvin/dataset/task_ABC_D
+HIMEM_CALVIN_ROOT=datasets/calvin/runtime
+HIMEM_CALVIN_DATASET_PATH=datasets/calvin/runtime/dataset/task_ABC_D
 ```
 
 Start the HiMem-Bridge-VLA server first, then run a dry-run to inspect resolved paths:
@@ -121,8 +122,8 @@ Run one smoke sequence:
 
 ```bash
 HIMEM_CALVIN_PROFILE=configs/calvin_profiles/smoke.env \
-HIMEM_CALVIN_RUN_DIR=/root/autodl-tmp/himem_runs/calvin_smoke_001 \
-CALVIN_PYTHON=/root/autodl-tmp/envs/calvin/bin/python \
+HIMEM_CALVIN_RUN_DIR=run_outputs/himem_runs/calvin_smoke_001 \
+CALVIN_PYTHON=run_outputs/calvin_env/bin/python \
 scripts/run_calvin_eval.sh
 ```
 
@@ -130,8 +131,8 @@ Run the default full evaluation:
 
 ```bash
 HIMEM_CALVIN_PROFILE=configs/calvin_profiles/full_eval.env \
-HIMEM_CALVIN_RUN_DIR=/root/autodl-tmp/himem_runs/calvin_eval_001 \
-CALVIN_PYTHON=/root/autodl-tmp/envs/calvin/bin/python \
+HIMEM_CALVIN_RUN_DIR=run_outputs/himem_runs/calvin_eval_001 \
+CALVIN_PYTHON=run_outputs/calvin_env/bin/python \
 scripts/run_calvin_eval.sh
 ```
 

@@ -81,17 +81,17 @@ def valid_libero_manifest_payload() -> dict:
         "run_kind": "smoke",
         "metadata": {
             "created_at_utc": "2026-06-10T00:00:00Z",
-            "cwd": "/tmp/himem",
+            "cwd": "run_outputs/himem",
             "argv": ["scripts/write_libero_run_manifest.py"],
             "command": "scripts/write_libero_run_manifest.py",
             "python": {
-                "executable": "/usr/bin/python3",
+                "executable": "python3",
                 "version": "3.10.0",
             },
             "platform": "Linux",
             "hostname": "host",
             "git": {
-                "repo_root": "/tmp/himem",
+                "repo_root": "run_outputs/himem",
                 "commit": "abc123",
                 "branch": "main",
                 "is_dirty": False,
@@ -102,11 +102,11 @@ def valid_libero_manifest_payload() -> dict:
         },
         "libero": {
             "HIMEM_LIBERO_CKPT_NAME": "smoke",
-            "HIMEM_LIBERO_LOG_DIR": "/tmp/himem/run/logs",
-            "HIMEM_LIBERO_VIDEO_DIR": "/tmp/himem/run/videos",
-            "HIMEM_LIBERO_LOG_FILE": "/tmp/himem/run/logs/smoke.txt",
-            "HIMEM_LIBERO_RESULT_FILE": "/tmp/himem/run/results/smoke_results.json",
-            "HIMEM_LIBERO_MANIFEST_FILE": "/tmp/himem/run/run_manifest.json",
+            "HIMEM_LIBERO_LOG_DIR": "run_outputs/himem/run/logs",
+            "HIMEM_LIBERO_VIDEO_DIR": "run_outputs/himem/run/videos",
+            "HIMEM_LIBERO_LOG_FILE": "run_outputs/himem/run/logs/smoke.txt",
+            "HIMEM_LIBERO_RESULT_FILE": "run_outputs/himem/run/results/smoke_results.json",
+            "HIMEM_LIBERO_MANIFEST_FILE": "run_outputs/himem/run/run_manifest.json",
             "HIMEM_LIBERO_TASK_SUITES": "libero_spatial",
             "HIMEM_LIBERO_TASK_LIMIT": "1",
             "HIMEM_LIBERO_EPISODES": "1",
@@ -226,6 +226,24 @@ def test_checkpoint_validation_rejects_invalid_norm_stats(tmp_path):
 
     assert report.has_failures
     assert "same length" in report.results[-1].message
+
+
+def test_checkpoint_validation_rejects_stats_longer_than_configured_action_dim(tmp_path):
+    preflight = load_preflight_module()
+    ckpt_dir = tmp_path / "ckpt"
+    ckpt_dir.mkdir()
+    stats = valid_norm_stats()
+    stats["libero"]["action"]["min"] = [-1.0] * 8
+    stats["libero"]["action"]["max"] = [1.0] * 8
+    (ckpt_dir / "config.json").write_text(json.dumps(valid_checkpoint_config()))
+    (ckpt_dir / "norm_stats.json").write_text(json.dumps(stats))
+    (ckpt_dir / "mp_rank_00_model_states.pt").write_bytes(b"checkpoint")
+
+    report = preflight.Report()
+    preflight.check_checkpoint_dir(ckpt_dir, report)
+
+    assert report.has_failures
+    assert "exceeds server target dimension 7" in report.results[-1].message
 
 
 def test_libero_result_validation_accepts_valid_result_file(tmp_path):
@@ -485,6 +503,7 @@ def test_dataset_config_validation_accepts_repo_default_without_strict_data():
         repo_root,
         strict_data=False,
         report=report,
+        repo_root=repo_root,
     )
 
     assert not report.has_failures
@@ -510,7 +529,7 @@ def test_dataset_config_strict_data_rejects_missing_dataset_path(tmp_path):
     )
     report = preflight.Report()
 
-    preflight.check_dataset_config(config_path, tmp_path, strict_data=True, report=report)
+    preflight.check_dataset_config(config_path, tmp_path, strict_data=True, report=report, repo_root=tmp_path)
 
     assert report.has_failures
     assert "path does not exist" in report.results[-1].message

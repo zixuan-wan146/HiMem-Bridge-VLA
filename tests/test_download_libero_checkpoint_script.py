@@ -34,25 +34,25 @@ def parse_key_values(stdout: str) -> dict[str, str]:
     return values
 
 
-def test_download_libero_checkpoint_dry_run_uses_data_root(tmp_path: Path):
-    data_root = tmp_path / "data"
-    result = run_dry_run({"HIMEM_DATA_ROOT": str(data_root)})
+def test_download_libero_checkpoint_dry_run_uses_data_root():
+    data_root = "run_outputs/libero_data_test"
+    result = run_dry_run({"HIMEM_DATA_ROOT": data_root})
 
     assert result.returncode == 0, result.stderr
     values = parse_key_values(result.stdout)
     assert values["HIMEM_LIBERO_CHECKPOINT_REPO"] == "MINT-SJTU/HiMem_LIBERO"
-    assert values["HIMEM_LIBERO_CHECKPOINT_DIR"] == str(data_root / "checkpoints" / "HiMem_LIBERO")
-    assert values["HF_HOME"] == str(data_root / "hf-home")
-    assert values["HUGGINGFACE_HUB_CACHE"] == str(data_root / "hf-cache")
+    assert values["HIMEM_LIBERO_CHECKPOINT_DIR"] == f"{data_root}/checkpoints/HiMem_LIBERO"
+    assert values["HF_HOME"] == f"{data_root}/hf-home"
+    assert values["HUGGINGFACE_HUB_CACHE"] == f"{data_root}/hf-cache"
     assert values["HF_MAX_WORKERS"] == "1"
     assert values["HIMEM_HF_ENDPOINT"] == ""
     assert "hf download MINT-SJTU/HiMem_LIBERO" in values["COMMAND"]
 
 
-def test_download_libero_checkpoint_dry_run_applies_endpoint_only_when_requested(tmp_path: Path):
+def test_download_libero_checkpoint_dry_run_applies_endpoint_only_when_requested():
     result = run_dry_run(
         {
-            "HIMEM_DATA_ROOT": str(tmp_path / "data"),
+            "HIMEM_DATA_ROOT": "run_outputs/libero_data_test",
             "HIMEM_HF_ENDPOINT": "https://hf-mirror.com",
             "HF_MAX_WORKERS": "2",
         }

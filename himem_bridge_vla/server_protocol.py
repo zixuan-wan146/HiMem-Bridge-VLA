@@ -19,6 +19,8 @@ def validate_inference_request(
     *,
     max_views: int = MAX_VIEWS,
     target_state_dim: int = TARGET_STATE_DIM,
+    target_action_dim: int | None = None,
+    max_action_mask_dim: int = TARGET_STATE_DIM,
 ) -> dict[str, Any]:
     if not isinstance(data, Mapping):
         raise TypeError(f"Inference request must be a JSON object, got {type(data).__name__}")
@@ -27,10 +29,15 @@ def validate_inference_request(
     if missing_fields:
         raise ValueError(f"Missing required request fields: {missing_fields}")
 
+    target_action_dim = target_state_dim if target_action_dim is None else target_action_dim
     images = _validate_images(data["image"], max_views=max_views)
     state = _validate_state(data["state"], target_state_dim=target_state_dim)
     image_mask = normalize_binary_mask(data["image_mask"], max_views, "image_mask")
-    action_mask = normalize_binary_mask(data["action_mask"], target_state_dim, "action_mask")
+    action_mask = normalize_action_mask(
+        data["action_mask"],
+        target_action_dim=target_action_dim,
+        max_action_mask_dim=max_action_mask_dim,
+    )
 
     if sum(image_mask) == 0:
         raise ValueError("image_mask must activate at least one image")
@@ -60,6 +67,63 @@ def validate_inference_request(
 
 
 def normalize_binary_mask(mask: Any, target_dim: int, field_name: str = "mask") -> list[int]:
+    flat_mask = _coerce_binary_mask(mask, field_name)
+
+    if flat_mask.size > target_dim:
+        raise ValueError(f"{field_name} length {flat_mask.size} exceeds target dimension {target_dim}")
+    if flat_mask.size < target_dim:
+        padded = np.zeros(target_dim, dtype=np.int32)
+        padded[: flat_mask.size] = flat_mask
+        flat_mask = padded
+    return flat_mask.astype(int).tolist()
+
+
+def normalize_action_mask(
+    mask: Any,
+    *,
+    target_action_dim: int,
+    max_action_mask_dim: int = TARGET_STATE_DIM,
+) -> list[int]:
+    if target_action_dim <= 0:
+        raise ValueError(f"target_action_dim must be positive, got {target_action_dim}")
+    if max_action_mask_dim < target_action_dim:
+        raise ValueError(
+            f"max_action_mask_dim {max_action_mask_dim} must be >= target_action_dim {target_action_dim}"
+        )
+
+    flat_mask = _coerce_binary_mask(mask, "action_mask")
+    if flat_mask.size > max_action_mask_dim:
+        raise ValueError(f"action_mask length {flat_mask.size} exceeds maximum dimension {max_action_mask_dim}")
+    if flat_mask.size > target_action_dim:
+        trailing = flat_mask[target_action_dim:]
+        if np.any(trailing != 0):
+            raise ValueError(
+                f"action_mask has active dimensions beyond model action dimension {target_action_dim}"
+            )
+        flat_mask = flat_mask[:target_action_dim]
+    if flat_mask.size < target_action_dim:
+        padded = np.zeros(target_action_dim, dtype=np.int32)
+        padded[: flat_mask.size] = flat_mask
+        flat_mask = padded
+    return flat_mask.astype(int).tolist()
+
+
+def checkpoint_normalizer_dim(config: Mapping[str, Any], default_dim: int = TARGET_STATE_DIM) -> int:
+    return max(
+        _positive_int_or_default(config.get("state_dim"), default_dim),
+        _positive_int_or_default(config.get("per_action_dim"), default_dim),
+    )
+
+
+def _positive_int_or_default(value: Any, default: int) -> int:
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        return default
+    return parsed if parsed > 0 else default
+
+
+def _coerce_binary_mask(mask: Any, field_name: str) -> np.ndarray:
     try:
         flat_mask = np.asarray(mask, dtype=np.int32).reshape(-1)
     except (TypeError, ValueError) as exc:
@@ -67,16 +131,10 @@ def normalize_binary_mask(mask: Any, target_dim: int, field_name: str = "mask") 
 
     if flat_mask.size == 0:
         raise ValueError(f"{field_name} must not be empty")
-    if flat_mask.size > target_dim:
-        raise ValueError(f"{field_name} length {flat_mask.size} exceeds target dimension {target_dim}")
     invalid_values = sorted({int(value) for value in flat_mask.tolist()} - {0, 1})
     if invalid_values:
         raise ValueError(f"{field_name} must contain only 0/1 values, got {invalid_values}")
-    if flat_mask.size < target_dim:
-        padded = np.zeros(target_dim, dtype=np.int32)
-        padded[: flat_mask.size] = flat_mask
-        flat_mask = padded
-    return flat_mask.astype(int).tolist()
+    return flat_mask
 
 
 def _validate_images(images: Any, *, max_views: int) -> list[Any]:

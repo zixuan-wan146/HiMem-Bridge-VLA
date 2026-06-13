@@ -12,11 +12,15 @@ REQUIRED_POSITIVE_INT_KEYS = (
     "max_views",
 )
 
+DATASET_PATH_KEYS = ("path", "boundary_path")
+
 
 def resolve_dataset_path(raw_path: str | Path, base_dir: str | Path) -> Path:
     path = Path(raw_path).expanduser()
     if path.is_absolute():
-        return path
+        raise ValueError(f"dataset path must be project-relative: {raw_path}")
+    if path.parts and path.parts[0] == "..":
+        raise ValueError(f"dataset path must stay inside the project: {raw_path}")
     return (Path(base_dir).expanduser() / path).resolve()
 
 
@@ -49,6 +53,17 @@ def validate_dataset_config_structure(config: Mapping[str, Any]) -> int:
         raw_path = dataset_config.get("path")
         if not isinstance(raw_path, str) or not raw_path:
             raise ValueError(f"dataset {group_name}/{dataset_name} has no path")
+        for path_key in DATASET_PATH_KEYS:
+            raw_value = dataset_config.get(path_key)
+            if raw_value in (None, ""):
+                continue
+            if not isinstance(raw_value, str):
+                raise ValueError(f"dataset {group_name}/{dataset_name} {path_key} must be a string")
+            normalized = Path(raw_value).expanduser()
+            if normalized.is_absolute():
+                raise ValueError(f"dataset {group_name}/{dataset_name} {path_key} must be project-relative")
+            if normalized.parts and normalized.parts[0] == "..":
+                raise ValueError(f"dataset {group_name}/{dataset_name} {path_key} must stay inside the project")
 
     return dataset_count
 
@@ -59,6 +74,9 @@ def resolve_dataset_config_paths(config: Mapping[str, Any], base_dir: str | Path
     resolved_config = deepcopy(dict(config))
     for group_name, dataset_name, _dataset_config in iter_dataset_entries(resolved_config):
         dataset_config = resolved_config["data_groups"][group_name][dataset_name]
-        dataset_config["path"] = str(resolve_dataset_path(dataset_config["path"], base_dir))
+        for path_key in DATASET_PATH_KEYS:
+            raw_value = dataset_config.get(path_key)
+            if raw_value not in (None, ""):
+                dataset_config[path_key] = str(resolve_dataset_path(raw_value, base_dir))
 
     return resolved_config

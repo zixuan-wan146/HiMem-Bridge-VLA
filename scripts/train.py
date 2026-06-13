@@ -1,35 +1,101 @@
-import sys
-import os
+from __future__ import annotations
+
+import argparse
+import json
+import logging
 import math
+import os
+import shutil
+import sys
+import warnings
 from contextlib import nullcontext
 from pathlib import Path
+from typing import Any
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-import wandb
-import swanlab
-import torch
-import torch.nn as nn
-from torch.utils.data import DataLoader
-from tqdm import tqdm
-from torch.optim.lr_scheduler import LambdaLR
-from himem_bridge_vla.model.himem_bridge_vla import HiMemBridgeVLA
-import logging
-import argparse
-from accelerate import Accelerator, DistributedType
-import json
-import shutil
-from torch.optim import AdamW
-from himem_bridge_vla.training_config import validate_training_config
+from himem_bridge_vla.training_config import (
+    default_training_config,
+    load_training_config,
+    merge_training_config,
+    resolve_training_config_paths,
+    validate_training_config,
+)
 from himem_bridge_vla.dataset.config_utils import resolve_dataset_config_paths
 from himem_bridge_vla.experiment_config import resolve_experiment_config
-from himem_bridge_vla.reproducibility import set_global_seed, write_experiment_snapshot
+from himem_bridge_vla.path_utils import display_project_path, normalize_project_relative_path, project_path
+from himem_bridge_vla.reproducibility import (
+    build_torch_generator,
+    seed_data_worker,
+    set_global_seed,
+    write_experiment_snapshot,
+)
+from himem_bridge_vla.training_loss import masked_flow_matching_mse
 
-import warnings
+torch: Any = None
+DataLoader: Any = None
+tqdm: Any = None
+LambdaLR: Any = None
+HiMemBridgeVLA: Any = None
+Accelerator: Any = None
+DistributedType: Any = None
+AdamW: Any = None
+accelerator: Any = None
+wandb: Any = None
+swanlab: Any = None
+WANDB_ACTIVE = False
+SWANLAB_ACTIVE = False
+_RUNTIME_LOADED = False
 
-accelerator = Accelerator()
+
+def _ensure_training_runtime() -> None:
+    global torch, DataLoader, tqdm, LambdaLR, HiMemBridgeVLA, Accelerator, DistributedType, AdamW
+    global accelerator, wandb, swanlab, _RUNTIME_LOADED
+
+    if _RUNTIME_LOADED:
+        return
+
+    try:
+        import torch as torch_module
+        from accelerate import Accelerator as AcceleratorClass
+        from accelerate import DistributedType as DistributedTypeClass
+        from torch.optim import AdamW as AdamWClass
+        from torch.optim.lr_scheduler import LambdaLR as LambdaLRClass
+        from torch.utils.data import DataLoader as DataLoaderClass
+        from tqdm import tqdm as tqdm_function
+
+        from himem_bridge_vla.model.himem_bridge_vla import HiMemBridgeVLA as HiMemBridgeVLAClass
+    except ModuleNotFoundError as exc:
+        missing = exc.name or "a training runtime dependency"
+        raise ModuleNotFoundError(
+            f"{missing} is required for training. Install the runtime dependencies from requirements.txt "
+            "or run this script in the prepared training environment."
+        ) from exc
+
+    torch = torch_module
+    DataLoader = DataLoaderClass
+    tqdm = tqdm_function
+    LambdaLR = LambdaLRClass
+    HiMemBridgeVLA = HiMemBridgeVLAClass
+    Accelerator = AcceleratorClass
+    DistributedType = DistributedTypeClass
+    AdamW = AdamWClass
+    accelerator = AcceleratorClass()
+
+    try:
+        import wandb as wandb_module
+    except ModuleNotFoundError:
+        wandb_module = None
+    try:
+        import swanlab as swanlab_module
+    except ModuleNotFoundError:
+        swanlab_module = None
+
+    wandb = wandb_module
+    swanlab = swanlab_module
+    _RUNTIME_LOADED = True
 
 def get_with_warning(config: dict, key: str, default):
     if key in config:
@@ -131,10 +197,18 @@ def setup_logging(log_dir: str) -> str:
     return log_path
 
 def init_wandb(config: dict, accelerator: Accelerator):
+    global WANDB_ACTIVE
 
     if accelerator.is_main_process:
         if get_with_warning(config, "disable_wandb", False):
-            os.environ["WANDB_MODE"] = "disabled"
+            logging.info("WandB logging disabled by config.")
+            WANDB_ACTIVE = False
+            return
+
+        if wandb is None:
+            logging.warning("wandb is not installed; skipping WandB logging.")
+            WANDB_ACTIVE = False
+            return
 
         wandb.init(
             project=get_with_warning(config, "wandb_project", "default_run"),
@@ -146,15 +220,26 @@ def init_wandb(config: dict, accelerator: Accelerator):
 
         wandb.define_metric("step")
         wandb.define_metric("*", step_metric="step")
+        WANDB_ACTIVE = True
 
 def init_swanlab(config: dict, accelerator: Accelerator):
+    global SWANLAB_ACTIVE
 
     if accelerator is None or accelerator.is_main_process:
+        if get_with_warning(config, "disable_swanlab", False):
+            logging.info("SwanLab logging disabled by config.")
+            SWANLAB_ACTIVE = False
+            return
+        if swanlab is None:
+            logging.warning("swanlab is not installed; skipping SwanLab logging.")
+            SWANLAB_ACTIVE = False
+            return
         swanlab.init(
             project=config.get("wandb_project", "default_run"),
             name=config.get("run_name", "default_run"),
             config=config
         )
+        SWANLAB_ACTIVE = True
 
 def prepare_dataset(config: dict) -> torch.utils.data.Dataset:
     dataset_type = get_with_warning(config, "dataset_type", "simulation")
@@ -168,11 +253,18 @@ def prepare_dataset(config: dict) -> torch.utils.data.Dataset:
 
         from himem_bridge_vla.dataset.simulation_dataset import SimulationDataset
 
-        with open(config.get("dataset_config_path"), 'r') as f:
+        dataset_config_path = project_path(
+            config.get("dataset_config_path"),
+            REPO_ROOT,
+            label="--dataset_config_path",
+        )
+        with dataset_config_path.open("r", encoding="utf-8") as f:
             dataset_config = yaml.safe_load(f)
-        dataset_config_base_dir = Path(
-            get_with_warning(config, "dataset_config_base_dir", str(PROJECT_ROOT))
-        ).expanduser().resolve()
+        dataset_config_base_dir = project_path(
+            get_with_warning(config, "dataset_config_base_dir", "."),
+            REPO_ROOT,
+            label="--dataset_config_base_dir",
+        )
         dataset_config = resolve_dataset_config_paths(dataset_config, dataset_config_base_dir)
 
         dataset = SimulationDataset(
@@ -192,7 +284,7 @@ def prepare_dataset(config: dict) -> torch.utils.data.Dataset:
             len(dataset),
             config.get("dataset_config_path"),
             dataset_type,
-            dataset_config_base_dir,
+            display_project_path(dataset_config_base_dir, REPO_ROOT),
         )
     return dataset
 
@@ -200,6 +292,7 @@ def prepare_dataset(config: dict) -> torch.utils.data.Dataset:
 def prepare_dataloader(dataset, config: dict) -> DataLoader:
     batch_size = get_with_warning(config, "batch_size", 8)
     num_workers = get_with_warning(config, "num_workers", 8)
+    seed = int(get_with_warning(config, "seed", 42))
 
     if len(dataset) == 0:
         raise ValueError("Dataset is empty. Check dataset_config_path and source data paths.")
@@ -212,7 +305,9 @@ def prepare_dataloader(dataset, config: dict) -> DataLoader:
         pin_memory=True,
         persistent_workers=False,
         drop_last=True,
-        collate_fn=custom_collate_fn
+        collate_fn=custom_collate_fn,
+        worker_init_fn=seed_data_worker,
+        generator=build_torch_generator(seed),
     )
     if len(dataloader) == 0:
         raise ValueError(
@@ -235,29 +330,25 @@ def log_training_step(step, loss, total_norm, clipped_norm, scheduler, dataloade
     if accelerator is None or accelerator.is_main_process:
         logging.info(f"Estimated Epoch: {current_epoch:.2f}")
         logging.info(f"[Step {step}] Loss: {loss.item():.4f}")
-        wandb.log({
+        metrics = {
             "step": step,
             "loss": loss.item(),
             "current_epoch": current_epoch,
             "learning_rate": scheduler.get_last_lr()[0],
-            
-        })
-        swanlab.log({
-            "step": step,
-            "loss": loss.item(),
-            "current_epoch": current_epoch,
-            "learning_rate": scheduler.get_last_lr()[0],
-    
-        })
+        }
+        if WANDB_ACTIVE:
+            wandb.log(metrics)
+        if SWANLAB_ACTIVE:
+            swanlab.log(metrics)
 
-def save_checkpoint(save_dir, step, model_engine, loss, accelerator, config=None, norm_stats=None):
+def save_checkpoint(save_dir, step, model_engine, loss, accelerator, config=None, norm_stats=None, tag=None):
     if not hasattr(model_engine, "save_checkpoint"):
         raise RuntimeError(
             "Checkpoint saving requires a DeepSpeed-prepared model. "
             "Launch with accelerate and a DeepSpeed config, as shown in README.md."
         )
-    tag = f"step_{step}"
-    checkpoint_dir = os.path.join(save_dir, tag)
+    checkpoint_tag = tag or f"step_{step}"
+    checkpoint_dir = os.path.join(save_dir, checkpoint_tag)
 
     if accelerator.is_main_process and os.path.exists(checkpoint_dir):
         logging.warning(f"Checkpoint directory {checkpoint_dir} exists. Removing before overwrite.")
@@ -267,11 +358,12 @@ def save_checkpoint(save_dir, step, model_engine, loss, accelerator, config=None
 
     client_state = {
         "step": step,
+        "checkpoint_tag": checkpoint_tag,
         "best_loss": loss if isinstance(loss, float) else loss.item(),
         "config": config,
     } if accelerator.is_main_process else {} 
 
-    model_engine.save_checkpoint(save_dir, tag=tag, client_state=client_state)
+    model_engine.save_checkpoint(save_dir, tag=checkpoint_tag, client_state=client_state)
     
     if accelerator.is_main_process:
         if config is not None:
@@ -311,7 +403,7 @@ def load_checkpoint_with_deepspeed(model_engine, load_dir, accelerator, tag="ste
         )
         if accelerator.is_main_process:
             logging.info(f"Loaded DeepSpeed checkpoint from {load_dir}/{tag} (including optimizer states)")
-        return client_state.get("step", 0), client_state
+        return _client_state_step(client_state, accelerator), client_state
         
     except Exception as e:
         if accelerator.is_main_process:
@@ -327,14 +419,23 @@ def load_checkpoint_with_deepspeed(model_engine, load_dir, accelerator, tag="ste
             )
             if accelerator.is_main_process:
                 logging.info(f"Loaded DeepSpeed checkpoint from {load_dir}/{tag} (model weights only)")
-            return client_state.get("step", 0), client_state
+            return _client_state_step(client_state, accelerator), client_state
             
         except Exception as e2:
             if accelerator.is_main_process:
                 logging.error(f"Failed to load checkpoint even without optimizer states: {str(e2)}")
             raise RuntimeError(f"Failed to load DeepSpeed checkpoint from {load_dir} with tag {tag}: {str(e2)}")
 
-    
+
+def _client_state_step(client_state, accelerator) -> int:
+    raw_step = client_state.get("step", 0)
+    try:
+        return int(raw_step)
+    except (TypeError, ValueError):
+        if accelerator is None or accelerator.is_main_process:
+            logging.warning("Checkpoint client_state step %r is not numeric; resuming scheduler from step 0.", raw_step)
+        return 0
+
 
 def get_and_clip_grad_norm(accelerator, model, loss, max_norm: float = 1.0):
 
@@ -369,12 +470,16 @@ def build_param_groups(model, wd):
         is_bias = n.endswith("bias") or ".bias" in n
         is_norm = (p.dim() == 1) or ("norm" in n.lower())
         (no_decay if is_bias or is_norm else decay).append(p)
+    if not decay and not no_decay:
+        raise ValueError("No trainable parameters found. Check finetune flags and Bridge-HiMem config.")
     return [{"params": decay, "weight_decay": wd},
             {"params": no_decay, "weight_decay": 0.0}]
 
 def train(config):
+    _ensure_training_runtime()
+
     config = resolve_experiment_config(config)
-    validate_training_config(config)
+    validate_training_config(config, repo_root=REPO_ROOT)
 
     seed = int(config.get("seed", 42))
     deterministic = bool(config.get("deterministic", False))
@@ -434,9 +539,6 @@ def train(config):
     max_steps = get_with_warning(config, "max_steps", 1000)
     warmup_steps = get_with_warning(config, "warmup_steps", 300)
     
-    # === loss function ===
-    loss_fn = nn.MSELoss() 
-
     # === Checkpoint and save path setup ===
     os.makedirs(save_dir, exist_ok=True)
     best_loss = float("inf")
@@ -556,11 +658,7 @@ def train(config):
                             f"action_mask: {action_mask}")
             
 
-            action_mask = action_mask.view(action_mask.shape[0], -1).to(dtype=pred_velocity.dtype)
-            pred_velocity_mask = pred_velocity * action_mask
-            loss = loss_fn(pred_velocity_mask, target_velocity)
-            scale_factor = action_mask.numel() / (action_mask.sum() + 1e-8)
-            loss = loss * scale_factor
+            loss = masked_flow_matching_mse(pred_velocity, target_velocity, action_mask)
             
             # === NaN/Inf check ===
             if not check_numerical_stability(
@@ -605,12 +703,13 @@ def train(config):
                     logging.info("Saving best checkpoint")
                 save_checkpoint(
                     save_dir,
-                    step="best",
+                    step=step,
                     model_engine=model_engine,
                     loss=loss,
                     accelerator=accelerator,
                     config=config,
-                    norm_stats=dataset.arm2stats_dict 
+                    norm_stats=dataset.arm2stats_dict,
+                    tag="step_best",
                 )
                 if accelerator.is_main_process:
                     logging.info(f"Saved best checkpoint at step {step} with loss {loss_value:.6f}")
@@ -622,79 +721,138 @@ def train(config):
                 save_checkpoint(save_dir, step=step, model_engine=model_engine, loss=loss, accelerator=accelerator, config=config, norm_stats=dataset.arm2stats_dict)
          
     # === Save final model ===
-    save_checkpoint(save_dir, step="final", model_engine=model_engine, loss=loss, accelerator=accelerator, config=config, norm_stats=dataset.arm2stats_dict)
+    save_checkpoint(
+        save_dir,
+        step=step,
+        model_engine=model_engine,
+        loss=loss,
+        accelerator=accelerator,
+        config=config,
+        norm_stats=dataset.arm2stats_dict,
+        tag="step_final",
+    )
     logging.info("Final model saved to step_final/")
     logging.info(f"Best checkpoint saved to step_best/ with loss {best_loss:.6f}")
 
 
-if __name__ == "__main__":
-
+def build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Train HiMem-Bridge-VLA")
+    parser.add_argument("--config", type=str, default=None, help="Optional checked-in YAML training profile.")
 
     # Basic config
-    parser.add_argument("--device", type=str, default="cuda")
-    parser.add_argument("--run_name", type=str, default="default_run")
-    parser.add_argument("--vlm_name", type=str, default="OpenGVLab/InternVL3-1B")
-    parser.add_argument("--action_head", type=str, default="flowmatching", choices=["flowmatching"])
-    parser.add_argument("--bridge_himem_config", type=str, default=None)
-    parser.add_argument("--seed", type=int, default=None)
-    parser.add_argument("--deterministic", action="store_true")
-    parser.add_argument("--return_cls_only", action="store_true")
-    parser.add_argument("--disable_wandb", action="store_true", help="Disable wandb logging.")
+    parser.add_argument("--device", type=str, default=argparse.SUPPRESS)
+    parser.add_argument("--run_name", type=str, default=argparse.SUPPRESS)
+    parser.add_argument("--vlm_name", type=str, default=argparse.SUPPRESS)
+    parser.add_argument("--action_head", type=str, choices=["flowmatching"], default=argparse.SUPPRESS)
+    parser.add_argument("--bridge_himem_config", type=str, default=argparse.SUPPRESS)
+    parser.add_argument("--seed", type=int, default=argparse.SUPPRESS)
+    parser.add_argument("--deterministic", action=argparse.BooleanOptionalAction, default=argparse.SUPPRESS)
+    parser.add_argument("--return_cls_only", action=argparse.BooleanOptionalAction, default=argparse.SUPPRESS)
+    parser.add_argument(
+        "--disable_wandb",
+        action=argparse.BooleanOptionalAction,
+        default=argparse.SUPPRESS,
+        help="Disable wandb logging.",
+    )
+    parser.add_argument(
+        "--disable_swanlab",
+        action=argparse.BooleanOptionalAction,
+        default=argparse.SUPPRESS,
+        help="Disable SwanLab logging.",
+    )
 
     # Dataset
-    parser.add_argument("--dataset_type", type=str, default="simulation")
-    parser.add_argument("--dataset_config_path", type=str, required=True)
+    parser.add_argument("--dataset_type", type=str, default=argparse.SUPPRESS)
+    parser.add_argument("--dataset_config_path", type=str, default=argparse.SUPPRESS)
     parser.add_argument(
         "--dataset_config_base_dir",
         type=str,
-        default=str(REPO_ROOT),
+        default=argparse.SUPPRESS,
         help="Base directory for relative paths inside dataset_config_path. Defaults to the repository root.",
     )
-    parser.add_argument("--cache_dir", type=str, default=None)
-    parser.add_argument("--image_size", type=int, default=448)
-    parser.add_argument("--binarize_gripper", action="store_true", default=False, help="Whether to binarize gripper state/action (default: False).")
-    parser.add_argument("--use_augmentation", action="store_true", help="Enable data augmentation on images")
+    parser.add_argument("--cache_dir", type=str, default=argparse.SUPPRESS)
+    parser.add_argument("--image_size", type=int, default=argparse.SUPPRESS)
+    parser.add_argument(
+        "--binarize_gripper",
+        action=argparse.BooleanOptionalAction,
+        default=argparse.SUPPRESS,
+        help="Whether to binarize gripper state/action.",
+    )
+    parser.add_argument(
+        "--use_augmentation",
+        action=argparse.BooleanOptionalAction,
+        default=argparse.SUPPRESS,
+        help="Enable data augmentation on images",
+    )
 
     # Training
-    parser.add_argument("--lr", type=float, default=1e-5)
-    parser.add_argument("--batch_size", type=int, default=16)
-    parser.add_argument("--max_steps", type=int, default=600)
-    parser.add_argument("--warmup_steps", type=int, default=300)
-    parser.add_argument("--grad_clip_norm", type=float, default=1.0)
-    parser.add_argument("--weight_decay", type=float, default=1e-5)
-
+    parser.add_argument("--lr", type=float, default=argparse.SUPPRESS)
+    parser.add_argument("--batch_size", type=int, default=argparse.SUPPRESS)
+    parser.add_argument("--max_steps", type=int, default=argparse.SUPPRESS)
+    parser.add_argument("--warmup_steps", type=int, default=argparse.SUPPRESS)
+    parser.add_argument("--grad_clip_norm", type=float, default=argparse.SUPPRESS)
+    parser.add_argument("--weight_decay", type=float, default=argparse.SUPPRESS)
 
     # Logging & checkpointing
-    parser.add_argument("--log_interval", type=int, default=10)
-    parser.add_argument("--ckpt_interval", type=int, default=10)
-    parser.add_argument("--save_dir", type=str, default="./checkpoints")
+    parser.add_argument("--log_interval", type=int, default=argparse.SUPPRESS)
+    parser.add_argument("--ckpt_interval", type=int, default=argparse.SUPPRESS)
+    parser.add_argument("--save_dir", type=str, default=argparse.SUPPRESS)
 
     # Resume
-    parser.add_argument("--resume", action="store_true")
-    parser.add_argument("--resume_path", type=str, default=None)
-    parser.add_argument("--resume_pretrain", action="store_true")
-   
+    parser.add_argument("--resume", action=argparse.BooleanOptionalAction, default=argparse.SUPPRESS)
+    parser.add_argument("--resume_path", type=str, default=argparse.SUPPRESS)
+    parser.add_argument("--resume_pretrain", action=argparse.BooleanOptionalAction, default=argparse.SUPPRESS)
 
     # Finetuning
-    parser.add_argument("--finetune_vlm", action="store_true")
-    parser.add_argument("--finetune_action_head", action="store_true")
+    parser.add_argument("--finetune_vlm", action=argparse.BooleanOptionalAction, default=argparse.SUPPRESS)
+    parser.add_argument("--finetune_action_head", action=argparse.BooleanOptionalAction, default=argparse.SUPPRESS)
 
     # Misc
-    parser.add_argument("--per_action_dim", type=int, default=7)
-    parser.add_argument("--state_dim", type=int, default=7)
-    parser.add_argument("--horizon", type=int, default=16)
-    parser.add_argument("--num_layers", type=int, default=8)
-    parser.add_argument("--num_workers", type=int, default=4)
-    # dropout
-    parser.add_argument("--dropout", type=float, default=0.0)
+    parser.add_argument("--per_action_dim", type=int, default=argparse.SUPPRESS)
+    parser.add_argument("--state_dim", type=int, default=argparse.SUPPRESS)
+    parser.add_argument("--horizon", type=int, default=argparse.SUPPRESS)
+    parser.add_argument("--num_layers", type=int, default=argparse.SUPPRESS)
+    parser.add_argument("--num_workers", type=int, default=argparse.SUPPRESS)
+    parser.add_argument("--dropout", type=float, default=argparse.SUPPRESS)
+    return parser
 
+
+def build_training_config(args: argparse.Namespace) -> dict:
+    cli_overrides = vars(args).copy()
+    config_path = cli_overrides.pop("config", None)
+    if config_path:
+        config_candidate = project_path(config_path, REPO_ROOT, label="--config")
+        file_config = load_training_config(config_candidate)
+        file_config["training_config_path"] = normalize_project_relative_path(
+            config_candidate,
+            REPO_ROOT,
+            label="--config",
+        )
+    else:
+        file_config = {}
+
+    config = merge_training_config(
+        default_training_config(REPO_ROOT),
+        file_config=file_config,
+        cli_overrides=cli_overrides,
+    )
+    config["repo_root"] = "."
+    return resolve_training_config_paths(config, REPO_ROOT)
+
+
+def main() -> int:
+    os.chdir(REPO_ROOT)
+    parser = build_arg_parser()
     args = parser.parse_args()
-    config = vars(args)
-
+    config = build_training_config(args)
     try:
         train(config)
     except KeyboardInterrupt:
-        if accelerator.is_main_process:
+        if accelerator is None or accelerator.is_main_process:
             logging.info("KeyboardInterrupt received. Cleaning up...")
-        sys.exit(0)
+        return 130
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

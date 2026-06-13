@@ -34,29 +34,27 @@ def parse_key_values(stdout: str) -> dict[str, str]:
     return values
 
 
-def test_setup_libero_dry_run_uses_repo_requirements_file(tmp_path: Path):
-    result = run_dry_run({"HIMEM_DATA_ROOT": str(tmp_path / "data")})
+def test_setup_libero_dry_run_uses_repo_requirements_file():
+    data_root = "run_outputs/libero_data_test"
+    result = run_dry_run({"HIMEM_DATA_ROOT": data_root})
 
     assert result.returncode == 0, result.stderr
     values = parse_key_values(result.stdout)
-    assert values["HIMEM_DATA_ROOT"] == str(tmp_path / "data")
-    assert values["LIBERO_ENV_PREFIX"] == str(tmp_path / "data" / "envs" / "libero")
-    assert values["HIMEM_LIBERO_REQUIREMENTS"] == str(REPO_ROOT / "requirements-libero.txt")
+    assert values["HIMEM_DATA_ROOT"] == data_root
+    assert values["LIBERO_ENV_PREFIX"] == f"{data_root}/envs/libero"
+    assert values["HIMEM_LIBERO_REQUIREMENTS"] == "requirements-libero.txt"
     assert values["CONDA_BIN"] == "auto"
 
 
-def test_setup_libero_dry_run_accepts_custom_requirements_file(tmp_path: Path):
-    requirements_file = tmp_path / "custom-libero.txt"
-    requirements_file.write_text("libero==0.1.1\n")
-
+def test_setup_libero_dry_run_accepts_custom_requirements_file():
     result = run_dry_run(
         {
-            "HIMEM_LIBERO_REQUIREMENTS": str(requirements_file),
-            "LIBERO_ENV_PREFIX": str(tmp_path / "env"),
+            "HIMEM_LIBERO_REQUIREMENTS": "requirements-dev.txt",
+            "LIBERO_ENV_PREFIX": "run_outputs/libero_env_test",
         }
     )
 
     assert result.returncode == 0, result.stderr
     values = parse_key_values(result.stdout)
-    assert values["HIMEM_LIBERO_REQUIREMENTS"] == str(requirements_file)
-    assert values["LIBERO_ENV_PREFIX"] == str(tmp_path / "env")
+    assert values["HIMEM_LIBERO_REQUIREMENTS"] == "requirements-dev.txt"
+    assert values["LIBERO_ENV_PREFIX"] == "run_outputs/libero_env_test"

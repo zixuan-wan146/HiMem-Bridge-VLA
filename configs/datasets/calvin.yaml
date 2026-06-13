@@ -1,9 +1,9 @@
 # CALVIN training profile for HiMem-Bridge-VLA.
 #
 # Expected training data format:
-# - LeRobot-style CALVIN conversion under /root/autodl-tmp/datasets/calvin/lerobot/task_D_D
+# - LeRobot-style CALVIN conversion under datasets/calvin/lerobot/task_D_D
 # - optional boundary sidecar generated from original CALVIN auto_lang_ann.npy:
-#   /root/autodl-tmp/datasets/calvin/annotations/task_D_D_boundaries.jsonl
+#   datasets/calvin/annotations/task_D_D_boundaries.jsonl
 #
 # The calvin adapter accepts both canonical LeRobot keys
 # (observation.state/action/observation.images.*) and RoboTron/StarVLA CALVIN
@@ -16,9 +16,9 @@ max_views: 3
 data_groups:
   calvin_franka:
     Calvin_Task_D_D:
-      path: /root/autodl-tmp/datasets/calvin/lerobot/task_D_D
+      path: datasets/calvin/lerobot/task_D_D
       adapter: calvin
-      boundary_path: /root/autodl-tmp/datasets/calvin/annotations/task_D_D_boundaries.jsonl
+      boundary_path: datasets/calvin/annotations/task_D_D_boundaries.jsonl
       fps: 30
       state_keys:
         - observation.state

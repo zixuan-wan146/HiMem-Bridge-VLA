@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Mapping, MutableMapping
 
 
-DEFAULT_CALVIN_ROOT = "/root/autodl-tmp/calvin"
+DEFAULT_CALVIN_ROOT = "datasets/calvin/runtime"
 DEFAULT_CALVIN_DATASET_RELATIVE_PATH = "dataset/task_ABC_D"
 VALID_GRIPPER_MODES = {"openvla", "passthrough", "sign"}
 VALID_RESET_MEMORY_SCOPES = {"sequence", "subtask", "never"}

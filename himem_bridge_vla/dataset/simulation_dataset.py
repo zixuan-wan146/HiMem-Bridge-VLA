@@ -16,13 +16,13 @@ import multiprocessing as mp
 import logging
 import pickle
 
+from himem_bridge_vla.dataset.cache_utils import dataset_cache_namespace
+from himem_bridge_vla.dataset.cache_utils import default_dataset_cache_dir
 from himem_bridge_vla.utils.normalization import minmax_normalize
 try:
     from .calvin_adapter import build_dataset_input_adapter
 except ImportError:
     from himem_bridge_vla.dataset.calvin_adapter import build_dataset_input_adapter
-
-DEFAULT_CACHE_DIR = Path(__file__).resolve().parents[1] / "training_data_cache"
 
 def compute_normalization_stats_from_minmax(jsonl_path, dataset_config=None):
     state_mins, state_maxs = [], []
@@ -96,6 +96,12 @@ def _process_parquet_file_worker(args):
     try:
         df = pd.read_parquet(parquet_path)
         adapter = build_dataset_input_adapter(dataset_config, dataset_path)
+        cache_namespace = dataset_cache_namespace(
+            dataset_config,
+            dataset_path,
+            action_horizon=action_horizon,
+            max_samples_per_file=max_samples_per_file,
+        )
 
         last_row = df.iloc[-1:]  
         padding_rows = pd.concat([last_row] * action_horizon, ignore_index=True)
@@ -110,7 +116,7 @@ def _process_parquet_file_worker(args):
             end_idx = i + action_horizon
             
       
-            cache_subdir = cache_dir / arm_name / dataset_name / parquet_path.parent.name / parquet_path.stem
+            cache_subdir = cache_dir / cache_namespace / arm_name / dataset_name / parquet_path.parent.name / parquet_path.stem
             cache_filename = f"{start_idx}_{end_idx}.pkl"
             cache_filepath = cache_subdir / cache_filename
             
@@ -170,7 +176,7 @@ class SimulationDataset(Dataset):
         config: Dict[str, Any],
         image_size: int = 448,
         max_samples_per_file: Union[int, None] = None,
-        video_backend: str = "av", # TODO: 
+        video_backend: str = "av",
         action_horizon: int = 50,
         video_backend_kwargs: Dict[str, Any] = None,
         binarize_gripper: bool = False,
@@ -192,7 +198,8 @@ class SimulationDataset(Dataset):
         self.use_augmentation = use_augmentation
 
 
-        self.cache_dir = Path(cache_dir) if cache_dir is not None else Path(os.getenv("HIMEM_CACHE_DIR", DEFAULT_CACHE_DIR))
+        cache_dir_value = cache_dir if cache_dir is not None else os.getenv("HIMEM_CACHE_DIR")
+        self.cache_dir = Path(cache_dir_value).expanduser() if cache_dir_value else default_dataset_cache_dir()
         self.cache_dir.mkdir(parents=True, exist_ok=True)
         
         self.data = []  

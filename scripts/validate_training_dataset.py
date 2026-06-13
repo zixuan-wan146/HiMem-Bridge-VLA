@@ -13,6 +13,7 @@ if str(REPO_ROOT_FOR_IMPORTS) not in sys.path:
 
 from himem_bridge_vla.dataset.config_utils import resolve_dataset_config_paths, validate_dataset_config_structure  # noqa: E402
 from himem_bridge_vla.dataset.validation import validate_configured_datasets  # noqa: E402
+from himem_bridge_vla.path_utils import display_project_path, project_path  # noqa: E402
 
 
 def load_dataset_config(path: Path) -> dict:
@@ -49,12 +50,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
     repo_root = Path(__file__).resolve().parents[1]
-    config_path = Path(args.dataset_config).expanduser()
-    if not config_path.is_absolute():
-        config_path = repo_root / config_path
-    base_dir = Path(args.dataset_base_dir).expanduser()
-    if not base_dir.is_absolute():
-        base_dir = repo_root / base_dir
+    config_path = project_path(args.dataset_config, repo_root, label="--dataset-config")
+    base_dir = project_path(args.dataset_base_dir, repo_root, label="--dataset-base-dir")
 
     try:
         config = load_dataset_config(config_path)
@@ -69,11 +66,11 @@ def main(argv: list[str] | None = None) -> int:
         return 1
 
     if not issues:
-        print(f"[OK] dataset: {config_path} training dataset structure is valid")
+        print(f"[OK] dataset: {display_project_path(config_path, repo_root)} training dataset structure is valid")
         return 0
 
     for issue in issues:
-        print(f"[{issue.level}] dataset: {issue.path}: {issue.message}")
+        print(f"[{issue.level}] dataset: {display_project_path(issue.path, repo_root)}: {issue.message}")
     return 1 if any(issue.level == "FAIL" for issue in issues) else 0
 
 

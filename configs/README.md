@@ -52,12 +52,31 @@ machine-local paths in environment variables when they differ from the defaults.
 
 ```text
 datasets/
-  simulation.yaml  MetaWorld-style simulation training data
+  simulation.yaml  Generic LeRobot-style simulation training data
   calvin.yaml      CALVIN LeRobot-style training data
 ```
 
 Relative dataset paths in these YAML files are resolved from `--dataset_config_base_dir`, which
 defaults to the repository root in `scripts/train.py`.
+
+## Training Profiles
+
+```text
+training/
+  calvin_stage1.yaml  FlowMatching warm-up profile
+  calvin_stage2.yaml  Bridge-HiMem fine-tuning profile
+```
+
+Training profiles keep experiment hyperparameters out of shell commands. Use CLI arguments only for
+machine-local overrides such as `--save_dir`, `--cache_dir`, `--resume_path`, or one-off ablations.
+The default cache path is `run_outputs/training_data_cache`; cache entries are automatically
+namespaced by the dataset config and action horizon.
+
+Validate profiles before training:
+
+```bash
+python3 scripts/validate_training_configs.py
+```
 
 ## DeepSpeed
 

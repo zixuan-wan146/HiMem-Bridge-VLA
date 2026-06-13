@@ -211,6 +211,7 @@ class FlowmatchingActionHead(nn.Module):
                                                     num_categories=num_categories)
 
         self.action_encoder = None
+        self.single_action_proj = None
         if horizon > 1:
           
             per_action_dim = getattr(self.config, "per_action_dim", None)
@@ -222,6 +223,8 @@ class FlowmatchingActionHead(nn.Module):
                                                                hidden_dim=embed_dim,  
                                                                horizon=horizon,
                                                                num_categories=num_categories)
+        else:
+            self.single_action_proj = nn.Linear(per_action_dim, embed_dim)
 
     def forward(
         self,
@@ -261,9 +264,6 @@ class FlowmatchingActionHead(nn.Module):
         time_index = (t * 1000).long()  
         time_emb = self.time_pos_enc(1000)[:, time_index, :].squeeze(0) 
     
-        actions_gt_seq = actions_gt  
-
-
         noise = torch.rand_like(actions_gt) * 2 - 1  
 
         if action_mask is not None:
@@ -275,23 +275,19 @@ class FlowmatchingActionHead(nn.Module):
 
         if self.horizon > 1:
             noise_seq = noise.view(B, self.horizon, self.per_action_dim)
+            actions_gt_seq = actions_gt.view(B, self.horizon, self.per_action_dim)
             
         else:
-            noise_seq = noise.unsqueeze(1)
+            noise_seq = noise.view(B, 1, self.per_action_dim)
+            actions_gt_seq = actions_gt.view(B, 1, self.per_action_dim)
 
-        if self.horizon > 1:
-            t_broadcast = t.view(B, 1, 1)
-        else:
-            t_broadcast = t.view(B, 1)
+        t_broadcast = t.view(B, 1, 1)
         action_intermediate_seq = (1 - t_broadcast) * noise_seq + t_broadcast * actions_gt_seq  
 
         if self.horizon > 1 and self.action_encoder is not None:
      
             action_tokens = self.action_encoder(action_intermediate_seq, embodiment_id)  
         else:
-
-            if not hasattr(self, "single_action_proj"):
-                self.single_action_proj = nn.Linear(self.per_action_dim, self.embed_dim).to(device)
             action_tokens = self.single_action_proj(action_intermediate_seq) 
 
         x = action_tokens  
@@ -304,9 +300,6 @@ class FlowmatchingActionHead(nn.Module):
  
             x_flat = x.reshape(B, -1)  
 
-            if not hasattr(self, "seq_pool_proj"):
-              
-                self.seq_pool_proj = nn.Linear(self.horizon * self.embed_dim, self.embed_dim).to(device)
             x_pooled = self.seq_pool_proj(x_flat)  
         else:
           
@@ -371,12 +364,7 @@ class FlowmatchingActionHead(nn.Module):
                 action_seq = action_seq * action_mask
                 action_tokens = self.action_encoder(action_seq, embodiment_id) 
             else:
-                if hasattr(self, "single_action_proj"):
-                    action_tokens = self.single_action_proj(action_seq)  
-                else:
-
-                    self.single_action_proj = nn.Linear(per_action_dim, self.embed_dim).to(device)
-                    action_tokens = self.single_action_proj(action_seq)
+                action_tokens = self.single_action_proj(action_seq)
 
             x = action_tokens
             for block in self.transformer_blocks:
@@ -385,12 +373,7 @@ class FlowmatchingActionHead(nn.Module):
 
             if self.horizon > 1:
                 x_flat = x.reshape(B, -1)
-                if hasattr(self, "seq_pool_proj"):
-                    x_pooled = self.seq_pool_proj(x_flat)
-                else:
-                   
-                    self.seq_pool_proj = nn.Linear(self.horizon * self.embed_dim, self.embed_dim).to(device)
-                    x_pooled = self.seq_pool_proj(x_flat)
+                x_pooled = self.seq_pool_proj(x_flat)
             else:
                 x_pooled = x.squeeze(1)
          
@@ -402,6 +385,8 @@ class FlowmatchingActionHead(nn.Module):
                 action_seq = action.view(B, self.horizon, per_action_dim)
             else:
                 action_seq = action.view(B, 1, per_action_dim)
+            action_seq = action_seq * action_mask
+            action = action_seq.reshape(B, action_dim_total)
       
         return action
 

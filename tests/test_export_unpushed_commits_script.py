@@ -4,6 +4,7 @@ import json
 import os
 import subprocess
 from pathlib import Path
+import sys
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -36,10 +37,12 @@ def create_repo_with_origin_main(tmp_path: Path) -> Path:
 
 
 def run_export(repo: Path, out_dir: Path) -> subprocess.CompletedProcess[str]:
+    export_dir = out_dir.relative_to(repo).as_posix()
     env = {
         **os.environ,
         "HIMEM_EXPORT_REPO": str(repo),
-        "HIMEM_EXPORT_DIR": str(out_dir),
+        "HIMEM_EXPORT_DIR": export_dir,
+        "PYTHON": sys.executable,
     }
     return subprocess.run(
         ["bash", str(SCRIPT)],
@@ -53,7 +56,7 @@ def run_export(repo: Path, out_dir: Path) -> subprocess.CompletedProcess[str]:
 
 def test_export_unpushed_commits_writes_patch_bundle(tmp_path: Path):
     repo = create_repo_with_origin_main(tmp_path)
-    out_dir = tmp_path / "export"
+    out_dir = repo / "export"
 
     (repo / "tracked.txt").write_text("base\nfirst\n")
     run_git(repo, "add", "tracked.txt")
@@ -68,7 +71,7 @@ def test_export_unpushed_commits_writes_patch_bundle(tmp_path: Path):
     patches = sorted((out_dir / "patches").glob("*.patch"))
     assert len(patches) == 2
     assert (out_dir / "README.md").exists()
-    assert "git am /path/to/export/patches/*.patch" in (out_dir / "README.md").read_text()
+    assert "git am exports/<export-name>/patches/*.patch" in (out_dir / "README.md").read_text()
 
     manifest = json.loads((out_dir / "manifest.json").read_text())
     assert manifest["base_ref"] == "origin/main"
@@ -84,7 +87,7 @@ def test_export_unpushed_commits_writes_patch_bundle(tmp_path: Path):
 def test_export_unpushed_commits_fails_when_head_is_not_ahead(tmp_path: Path):
     repo = create_repo_with_origin_main(tmp_path)
 
-    result = run_export(repo, tmp_path / "export")
+    result = run_export(repo, repo / "export")
 
     assert result.returncode != 0
     assert "no commits to export" in result.stderr

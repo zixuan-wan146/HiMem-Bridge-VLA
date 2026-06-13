@@ -29,6 +29,7 @@ libero_profile_allowed_key() {
 load_libero_profile() {
   local repo_root=$1
   local profile=${HIMEM_LIBERO_PROFILE:-}
+  local profile_path
   local line key value
 
   if [ -z "$profile" ]; then
@@ -36,11 +37,14 @@ load_libero_profile() {
   fi
 
   case "$profile" in
-    /*) ;;
-    *) profile="$repo_root/$profile" ;;
+    /*)
+      printf '[libero-profile] ERROR: HIMEM_LIBERO_PROFILE must be project-relative: %s\n' "$profile" >&2
+      return 1
+      ;;
   esac
+  profile_path="$repo_root/$profile"
 
-  if [ ! -f "$profile" ]; then
+  if [ ! -f "$profile_path" ]; then
     printf '[libero-profile] ERROR: profile file does not exist: %s\n' "$profile" >&2
     return 1
   fi
@@ -66,7 +70,7 @@ load_libero_profile() {
     if [ -z "${!key+x}" ]; then
       export "$key=$value"
     fi
-  done < "$profile"
+  done < "$profile_path"
 
   export HIMEM_LIBERO_PROFILE="$profile"
 }

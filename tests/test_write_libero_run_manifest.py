@@ -4,6 +4,7 @@ import json
 import os
 import subprocess
 from pathlib import Path
+import sys
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -14,8 +15,8 @@ def test_write_libero_run_manifest_records_run_context(tmp_path: Path):
     output_path = tmp_path / "run" / "run_manifest.json"
     env = {
         **os.environ,
-        "HIMEM_LIBERO_RUN_DIR": str(tmp_path / "run"),
-        "HIMEM_LIBERO_RESULT_FILE": str(tmp_path / "run" / "results" / "smoke_results.json"),
+        "HIMEM_LIBERO_RUN_DIR": "run_outputs/libero_smoke",
+        "HIMEM_LIBERO_RESULT_FILE": "run_outputs/libero_smoke/results/smoke_results.json",
         "HIMEM_LIBERO_CKPT_NAME": "smoke",
         "HIMEM_SERVER_URI": "ws://127.0.0.1:9000",
         "HIMEM_TOKEN": "should-not-be-written",
@@ -23,7 +24,7 @@ def test_write_libero_run_manifest_records_run_context(tmp_path: Path):
 
     result = subprocess.run(
         [
-            "python3",
+            sys.executable,
             str(SCRIPT),
             "--output",
             str(output_path),
@@ -45,8 +46,8 @@ def test_write_libero_run_manifest_records_run_context(tmp_path: Path):
     assert payload["schema_version"] == 1
     assert payload["run_kind"] == "smoke"
     assert payload["libero"]["HIMEM_LIBERO_CKPT_NAME"] == "smoke"
-    assert payload["libero"]["HIMEM_LIBERO_RUN_DIR"] == str(tmp_path / "run")
+    assert payload["libero"]["HIMEM_LIBERO_RUN_DIR"] == "run_outputs/libero_smoke"
     assert payload["libero"]["HIMEM_SERVER_URI"] == "ws://127.0.0.1:9000"
-    assert payload["metadata"]["git"]["repo_root"] == str(REPO_ROOT)
+    assert payload["metadata"]["git"]["repo_root"] == "."
     assert "HIMEM_TOKEN" not in payload["metadata"]["environment"]
     assert "HIMEM_TOKEN" not in payload["libero"]

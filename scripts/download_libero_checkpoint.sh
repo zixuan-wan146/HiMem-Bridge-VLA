@@ -13,36 +13,33 @@ fail() {
 default_data_root() {
   if [ -n "${HIMEM_DATA_ROOT:-}" ]; then
     printf '%s\n' "$HIMEM_DATA_ROOT"
-  elif [ -d /root/autodl-tmp ] && [ -w /root/autodl-tmp ]; then
-    printf '%s\n' /root/autodl-tmp
   else
-    printf '%s\n' "$PWD/.himem-data"
+    printf '%s\n' "run_outputs/libero_data"
   fi
+}
+
+require_project_relative() {
+  local name=$1
+  local value=$2
+  case "$value" in
+    /*) fail "$name must be project-relative: $value" ;;
+  esac
 }
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 repo_root="$(cd "$script_dir/.." && pwd)"
+cd "$repo_root"
 data_root="$(default_data_root)"
+require_project_relative "HIMEM_DATA_ROOT" "$data_root"
 repo_id="${HIMEM_LIBERO_CHECKPOINT_REPO:-MINT-SJTU/HiMem_LIBERO}"
 checkpoint_dir="${HIMEM_LIBERO_CHECKPOINT_DIR:-$data_root/checkpoints/HiMem_LIBERO}"
 hf_home="${HF_HOME:-$data_root/hf-home}"
 hf_cache="${HUGGINGFACE_HUB_CACHE:-$data_root/hf-cache}"
 max_workers="${HF_MAX_WORKERS:-1}"
 
-case "$checkpoint_dir" in
-  /*) ;;
-  *) checkpoint_dir="$repo_root/$checkpoint_dir" ;;
-esac
-
-case "$hf_home" in
-  /*) ;;
-  *) hf_home="$repo_root/$hf_home" ;;
-esac
-
-case "$hf_cache" in
-  /*) ;;
-  *) hf_cache="$repo_root/$hf_cache" ;;
-esac
+require_project_relative "HIMEM_LIBERO_CHECKPOINT_DIR" "$checkpoint_dir"
+require_project_relative "HF_HOME" "$hf_home"
+require_project_relative "HUGGINGFACE_HUB_CACHE" "$hf_cache"
 
 if [ "${HIMEM_DOWNLOAD_LIBERO_CHECKPOINT_DRY_RUN:-0}" = "1" ]; then
   printf 'HIMEM_DATA_ROOT=%s\n' "$data_root"

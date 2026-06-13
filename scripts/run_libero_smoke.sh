@@ -12,8 +12,10 @@ run_dir="${HIMEM_LIBERO_RUN_DIR:-}"
 
 if [ -n "$run_dir" ]; then
   case "$run_dir" in
-    /*) ;;
-    *) run_dir="$repo_root/$run_dir" ;;
+    /*)
+      printf '[libero-smoke] ERROR: HIMEM_LIBERO_RUN_DIR must be project-relative: %s\n' "$run_dir" >&2
+      exit 2
+      ;;
   esac
   export HIMEM_LIBERO_RUN_DIR="$run_dir"
 fi
@@ -33,8 +35,8 @@ if [ -n "$run_dir" ]; then
   export HIMEM_LIBERO_RESULT_FILE="${HIMEM_LIBERO_RESULT_FILE:-$run_dir/results/${HIMEM_LIBERO_CKPT_NAME}_results.json}"
   export HIMEM_LIBERO_MANIFEST_FILE="${HIMEM_LIBERO_MANIFEST_FILE:-$run_dir/run_manifest.json}"
 else
-  export HIMEM_LIBERO_LOG_DIR="${HIMEM_LIBERO_LOG_DIR:-$repo_root/evaluations/libero/log_file}"
-  export HIMEM_LIBERO_VIDEO_DIR="${HIMEM_LIBERO_VIDEO_DIR:-$repo_root/evaluations/libero/video_log_file/$HIMEM_LIBERO_CKPT_NAME}"
+  export HIMEM_LIBERO_LOG_DIR="${HIMEM_LIBERO_LOG_DIR:-evaluations/libero/log_file}"
+  export HIMEM_LIBERO_VIDEO_DIR="${HIMEM_LIBERO_VIDEO_DIR:-evaluations/libero/video_log_file/$HIMEM_LIBERO_CKPT_NAME}"
   export HIMEM_LIBERO_RESULT_FILE="${HIMEM_LIBERO_RESULT_FILE:-$HIMEM_LIBERO_LOG_DIR/${HIMEM_LIBERO_CKPT_NAME}_results.json}"
   export HIMEM_LIBERO_MANIFEST_FILE="${HIMEM_LIBERO_MANIFEST_FILE:-$HIMEM_LIBERO_LOG_DIR/${HIMEM_LIBERO_CKPT_NAME}_run_manifest.json}"
 fi
@@ -49,16 +51,18 @@ if [ "${HIMEM_LIBERO_DRY_RUN:-0}" = "1" ]; then
   exit 0
 fi
 
+cd "$repo_root"
+
 mkdir -p \
   "$HIMEM_LIBERO_LOG_DIR" \
   "$HIMEM_LIBERO_VIDEO_DIR" \
   "$(dirname "$HIMEM_LIBERO_RESULT_FILE")" \
   "$(dirname "$HIMEM_LIBERO_MANIFEST_FILE")"
 
-"$repo_root/scripts/write_libero_run_manifest.py" \
+scripts/write_libero_run_manifest.py \
   --output "$HIMEM_LIBERO_MANIFEST_FILE" \
   --run-kind smoke \
-  --repo-root "$repo_root"
+  --repo-root "."
 
-cd "$repo_root/evaluations/libero"
-exec "$python_bin" libero_client_4tasks.py
+export PYTHONPATH=".:evaluations/libero${PYTHONPATH:+:$PYTHONPATH}"
+exec "$python_bin" evaluations/libero/libero_client_4tasks.py

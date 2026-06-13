@@ -12,15 +12,17 @@ run_dir="${HIMEM_CALVIN_RUN_DIR:-}"
 
 if [ -n "$run_dir" ]; then
   case "$run_dir" in
-    /*) ;;
-    *) run_dir="$repo_root/$run_dir" ;;
+    /*)
+      printf '[calvin-eval] ERROR: HIMEM_CALVIN_RUN_DIR must be project-relative: %s\n' "$run_dir" >&2
+      exit 2
+      ;;
   esac
   export HIMEM_CALVIN_RUN_DIR="$run_dir"
 fi
 
 export HIMEM_SERVER_URI="${HIMEM_SERVER_URI:-ws://127.0.0.1:9000}"
 export HIMEM_MUJOCO_GL="${HIMEM_MUJOCO_GL:-osmesa}"
-export HIMEM_CALVIN_ROOT="${HIMEM_CALVIN_ROOT:-/root/autodl-tmp/calvin}"
+export HIMEM_CALVIN_ROOT="${HIMEM_CALVIN_ROOT:-datasets/calvin/runtime}"
 export HIMEM_CALVIN_DATASET_PATH="${HIMEM_CALVIN_DATASET_PATH:-$HIMEM_CALVIN_ROOT/dataset/task_ABC_D}"
 export CALVIN_ROOT="$HIMEM_CALVIN_ROOT"
 export HIMEM_CALVIN_NUM_SEQUENCES="${HIMEM_CALVIN_NUM_SEQUENCES:-1000}"
@@ -40,8 +42,8 @@ if [ -n "$run_dir" ]; then
   export HIMEM_CALVIN_RESULT_FILE="${HIMEM_CALVIN_RESULT_FILE:-$run_dir/results/${HIMEM_CALVIN_CKPT_NAME}_results.json}"
   export HIMEM_CALVIN_MANIFEST_FILE="${HIMEM_CALVIN_MANIFEST_FILE:-$run_dir/run_manifest.json}"
 else
-  export HIMEM_CALVIN_LOG_DIR="${HIMEM_CALVIN_LOG_DIR:-$repo_root/evaluations/calvin/log_file}"
-  export HIMEM_CALVIN_VIDEO_DIR="${HIMEM_CALVIN_VIDEO_DIR:-$repo_root/evaluations/calvin/video_log_file/$HIMEM_CALVIN_CKPT_NAME}"
+  export HIMEM_CALVIN_LOG_DIR="${HIMEM_CALVIN_LOG_DIR:-evaluations/calvin/log_file}"
+  export HIMEM_CALVIN_VIDEO_DIR="${HIMEM_CALVIN_VIDEO_DIR:-evaluations/calvin/video_log_file/$HIMEM_CALVIN_CKPT_NAME}"
   export HIMEM_CALVIN_RESULT_FILE="${HIMEM_CALVIN_RESULT_FILE:-$HIMEM_CALVIN_LOG_DIR/${HIMEM_CALVIN_CKPT_NAME}_results.json}"
   export HIMEM_CALVIN_MANIFEST_FILE="${HIMEM_CALVIN_MANIFEST_FILE:-$HIMEM_CALVIN_LOG_DIR/${HIMEM_CALVIN_CKPT_NAME}_run_manifest.json}"
 fi
@@ -56,16 +58,17 @@ if [ "${HIMEM_CALVIN_DRY_RUN:-0}" = "1" ]; then
   exit 0
 fi
 
+cd "$repo_root"
+
 mkdir -p \
   "$HIMEM_CALVIN_LOG_DIR" \
   "$HIMEM_CALVIN_VIDEO_DIR" \
   "$(dirname "$HIMEM_CALVIN_RESULT_FILE")" \
   "$(dirname "$HIMEM_CALVIN_MANIFEST_FILE")"
 
-"$repo_root/scripts/write_calvin_run_manifest.py" \
+scripts/write_calvin_run_manifest.py \
   --output "$HIMEM_CALVIN_MANIFEST_FILE" \
   --run-kind eval \
-  --repo-root "$repo_root"
+  --repo-root "."
 
-cd "$repo_root"
 exec "$python_bin" -m evaluations.calvin.calvin_client
