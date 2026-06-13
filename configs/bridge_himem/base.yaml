@@ -1,0 +1,52 @@
+experiment_name: bridge_himem_base
+seed: 42
+
+vlm:
+  hidden_dim: 896
+  raw_dim:
+  raw_layers: [3, 7, 11, 14]
+  freeze: true
+
+action_query:
+  source: learned_bridge
+  num_tokens: 64
+
+bridge:
+  enabled: false
+  variant: crosskv
+  num_layers: 4
+  num_heads: 8
+  num_action_tokens: 16
+  dropout: 0.0
+  raw_gate_init: 0.0
+  ffn_mult: 4
+
+context:
+  mode: fused_only
+  fused_gate_init: 0.0
+
+memory:
+  enabled: false
+  placement: crosskv
+  token_dim: 896
+  bank_max_tokens: 64
+  read_top_k: 8
+  write_threshold: 0.5
+  writer:
+    num_tokens: 4
+    num_heads: 8
+    dropout: 0.0
+  segment:
+    accumulator: ema
+    ema_decay: 0.9
+    write_policy: boundary
+
+skill:
+  enabled: false
+  num_tokens: 4
+
+action_head:
+  kind: flowmatching
+  use_existing_checkpoint_config: true
+  horizon:
+  per_action_dim:

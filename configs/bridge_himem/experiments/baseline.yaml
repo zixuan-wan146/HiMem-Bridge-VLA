@@ -1,0 +1,4 @@
+extends: ../base.yaml
+
+experiment_name: baseline_fused_only
+

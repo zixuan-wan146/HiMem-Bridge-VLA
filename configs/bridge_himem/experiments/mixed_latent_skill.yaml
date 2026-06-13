@@ -1,0 +1,7 @@
+extends:
+  - mixed_latent_clean.yaml
+
+experiment_name: mixed_latent_skill
+
+skill:
+  enabled: true
