@@ -109,6 +109,62 @@ class FlowMatchingConfigTests(unittest.TestCase):
 
         self.assertTrue(torch.equal(action[:, :, 1], torch.zeros_like(action[:, :, 1])))
 
+    def test_action_head_training_shapes_for_common_horizons(self):
+        torch = self._import_or_skip("torch")
+        flow_matching = self._import_or_skip("himem_bridge_vla.model.action_head.flow_matching")
+
+        for horizon, per_action_dim in ((1, 7), (14, 7), (16, 8)):
+            with self.subTest(horizon=horizon, per_action_dim=per_action_dim):
+                action_dim = horizon * per_action_dim
+                head = flow_matching.FlowmatchingActionHead(
+                    embed_dim=8,
+                    hidden_dim=16,
+                    action_dim=action_dim,
+                    horizon=horizon,
+                    per_action_dim=per_action_dim,
+                    num_heads=2,
+                    num_layers=1,
+                    num_inference_timesteps=1,
+                )
+                fused_tokens = torch.zeros(2, 3, 8)
+                actions_gt = torch.zeros(2, horizon, per_action_dim)
+                action_mask = torch.ones(2, horizon, per_action_dim)
+
+                pred_velocity, noise = head(fused_tokens, actions_gt=actions_gt, action_mask=action_mask)
+
+                self.assertEqual(tuple(pred_velocity.shape), (2, action_dim))
+                self.assertEqual(tuple(noise.shape), (2, horizon, per_action_dim))
+
+    def test_multi_category_action_head_training_shape(self):
+        torch = self._import_or_skip("torch")
+        flow_matching = self._import_or_skip("himem_bridge_vla.model.action_head.flow_matching")
+
+        head = flow_matching.FlowmatchingActionHead(
+            embed_dim=8,
+            hidden_dim=16,
+            action_dim=6,
+            horizon=2,
+            per_action_dim=3,
+            num_heads=2,
+            num_layers=1,
+            num_inference_timesteps=1,
+            num_categories=2,
+        )
+        fused_tokens = torch.zeros(2, 3, 8)
+        actions_gt = torch.zeros(2, 2, 3)
+        action_mask = torch.ones(2, 2, 3)
+        embodiment_id = torch.tensor([0, 1], dtype=torch.long)
+
+        pred_velocity, noise = head(
+            fused_tokens,
+            actions_gt=actions_gt,
+            action_mask=action_mask,
+            embodiment_id=embodiment_id,
+        )
+
+        self.assertEqual(tuple(pred_velocity.shape), (2, 6))
+        self.assertEqual(tuple(noise.shape), (2, 2, 3))
+
     def _import_or_skip(self, module_name):
         try:
             return __import__(module_name, fromlist=["*"])

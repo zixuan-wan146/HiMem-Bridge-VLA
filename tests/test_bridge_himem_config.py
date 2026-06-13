@@ -23,6 +23,7 @@ class BridgeHiMemConfigTests(unittest.TestCase):
         self.assertEqual(legacy["bridge_variant"], "crosskv")
         self.assertEqual(legacy["memory_placement"], "crosskv")
         self.assertEqual(legacy["bridge_raw_layers"], [3, 7, 11, 14])
+        self.assertFalse(legacy["allow_image_token_truncation"])
         self.assertEqual(legacy["bridge_context_mode"], "bridge_clean")
         self.assertEqual(legacy["memory_write_tokens"], 4)
 

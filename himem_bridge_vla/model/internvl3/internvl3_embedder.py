@@ -74,11 +74,18 @@ def dynamic_preprocess(image, min_num=1, max_num=1, image_size=448, use_thumbnai
     return processed_images
 
 class InternVL3Embedder(nn.Module):
-    def __init__(self, model_name="OpenGVLab/InternVL3-1B", image_size=448, device="cuda"):
+    def __init__(
+        self,
+        model_name="OpenGVLab/InternVL3-1B",
+        image_size=448,
+        device="cuda",
+        allow_image_token_truncation: bool = False,
+    ):
         super().__init__()
         self.device = device
         self.image_size = image_size
         self.max_text_length = 1024  # InternVL3 supports up to 1024 tokens
+        self.allow_image_token_truncation = bool(allow_image_token_truncation)
         self.transform = build_transform(image_size)
         self.tokenizer = AutoTokenizer.from_pretrained(model_name, trust_remote_code=True, use_fast=False)
         self.model = AutoModel.from_pretrained(
@@ -185,19 +192,29 @@ class InternVL3Embedder(nn.Module):
 
         selected = (input_ids == self.img_context_token_id)
 
-            
-        try:
-            input_embeds[selected] = input_embeds[selected] * 0.0 + vit_embeds.reshape(-1, C)
-        except Exception as e:
-            vit_embeds = vit_embeds.reshape(-1, C)
-            logging.warning(
-                "Image/text embedding alignment fallback: %s, selected_shape=%s, vit_shape=%s",
-                e,
-                input_embeds[selected].shape,
-                vit_embeds.shape,
+        vit_embeds = vit_embeds.reshape(-1, C)
+        selected_count = int(selected.sum().item())
+        vit_token_count = int(vit_embeds.shape[0])
+        if selected_count != vit_token_count:
+            message = (
+                "Image/text embedding token mismatch: "
+                f"selected_img_context_tokens={selected_count}, "
+                f"vit_tokens={vit_token_count}, "
+                f"prompt_length={true_sequence_length}, "
+                f"max_text_length={self.max_text_length}, "
+                f"image_count={len(num_tiles_list)}, "
+                f"active_image_count={int(torch.as_tensor(image_mask).sum().item())}, "
+                f"num_tiles_list={num_tiles_list}"
             )
-            n_token = selected.sum()
-            input_embeds[selected] = input_embeds[selected] * 0.0 + vit_embeds[:n_token]
+            if not self.allow_image_token_truncation:
+                raise ValueError(message)
+            logging.warning("%s; applying explicit truncation fallback", message)
+            selected_indices = selected.nonzero(as_tuple=False).reshape(-1)
+            copy_count = min(selected_count, vit_token_count)
+            if copy_count > 0:
+                input_embeds[selected_indices[:copy_count]] = vit_embeds[:copy_count]
+        else:
+            input_embeds[selected] = input_embeds[selected] * 0.0 + vit_embeds
 
  
         tokens_per_tile = self.model.num_image_token 

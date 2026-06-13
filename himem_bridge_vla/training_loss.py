@@ -27,3 +27,27 @@ def masked_flow_matching_mse(pred_velocity: Any, target_velocity: Any, action_ma
 
     squared_error = (pred_velocity - target_velocity).pow(2) * flat_mask
     return squared_error.sum() / active_dims
+
+
+def boundary_bce_loss(boundary_logits: Any, boundary_labels: Any) -> Any:
+    """Binary cross entropy for skill-boundary supervision."""
+
+    import torch.nn.functional as F
+
+    labels = boundary_labels.reshape(-1, 1).to(device=boundary_logits.device, dtype=boundary_logits.dtype)
+    if labels.shape != boundary_logits.shape:
+        raise ValueError(f"boundary label shape {labels.shape} != boundary_logits shape {boundary_logits.shape}")
+    return F.binary_cross_entropy_with_logits(boundary_logits, labels)
+
+
+def progress_smooth_l1_loss(progress_logits: Any, progress_labels: Any) -> Any:
+    """Smooth L1 loss for segment progress labels in [0, 1]."""
+
+    import torch
+    import torch.nn.functional as F
+
+    labels = progress_labels.reshape(-1, 1).to(device=progress_logits.device, dtype=progress_logits.dtype)
+    if labels.shape != progress_logits.shape:
+        raise ValueError(f"progress label shape {labels.shape} != progress_logits shape {progress_logits.shape}")
+    prediction = torch.sigmoid(progress_logits)
+    return F.smooth_l1_loss(prediction, labels)

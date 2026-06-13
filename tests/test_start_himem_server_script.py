@@ -38,7 +38,12 @@ def make_valid_checkpoint(tmp_path: Path) -> Path:
     return ckpt_dir
 
 
-def run_script(ckpt_dir: Path, *, skip_preflight: bool = False) -> subprocess.CompletedProcess[str]:
+def run_script(
+    ckpt_dir: Path,
+    *,
+    skip_preflight: bool = False,
+    allow_unsafe_checkpoint_load: bool = False,
+) -> subprocess.CompletedProcess[str]:
     ckpt_arg = ckpt_dir.relative_to(REPO_ROOT).as_posix()
     env = {
         **os.environ,
@@ -49,6 +54,8 @@ def run_script(ckpt_dir: Path, *, skip_preflight: bool = False) -> subprocess.Co
     }
     if skip_preflight:
         env["HIMEM_SKIP_PREFLIGHT"] = "1"
+    if allow_unsafe_checkpoint_load:
+        env["HIMEM_ALLOW_UNSAFE_CHECKPOINT_LOAD"] = "1"
     return subprocess.run(
         ["bash", str(SCRIPT), ckpt_arg],
         cwd=REPO_ROOT,
@@ -81,6 +88,15 @@ def test_start_script_can_skip_preflight_for_debugging(tmp_path):
     assert result.returncode == 0
     assert "[OK] checkpoint:" not in result.stdout
     assert "scripts/himem_server.py" in result.stdout
+
+
+def test_start_script_passes_explicit_unsafe_checkpoint_flag(tmp_path):
+    ckpt_dir = make_valid_checkpoint(tmp_path)
+
+    result = run_script(ckpt_dir, allow_unsafe_checkpoint_load=True)
+
+    assert result.returncode == 0
+    assert "--allow_unsafe_checkpoint_load" in result.stdout
 
 
 def test_start_script_fails_when_preflight_rejects_checkpoint(tmp_path):

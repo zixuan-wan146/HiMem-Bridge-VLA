@@ -71,6 +71,38 @@ RGB views + prompt
 现在 A/B clean 配置都用 `bridge_clean`，避免把“memory 放哪儿”的比较和
 “是否保留 fused residual”的比较混在一起。
 
+## baseline、Evo 初始化和目标模型
+
+`baseline_fused_only` 不是当前项目要主推的目标模型。它只是对照组，用来回答：
+
+```text
+不加 BridgeAttention、不加 HiMem、不加 skill token 时，原始 VLM fused tokens + FlowMatching
+action head 能做到多少。
+```
+
+真正需要比较的两条主线是：
+
+- `crosskv_clean.yaml`：memory 进入 BridgeAttention 的 condition/KV 路径。
+- `mixed_latent_clean.yaml` / `mixed_latent_skill.yaml`：memory 作为 action-head context
+  token 直接参与动作生成。
+
+如果已有 Evo VLA checkpoint，并且它的 VLM、FlowMatching action head、`horizon`、
+`per_action_dim`、`state_dim` 与当前配置兼容，那么它应作为 shared initialization，
+优先替代从头 warm-up：
+
+```text
+Evo checkpoint
+  -> baseline_fused_only finetune, only as control
+  -> crosskv_clean
+  -> mixed_latent_clean / mixed_latent_skill
+```
+
+这样可以保证 baseline、CrossKV 和 MixedLatent 从同一个初始化出发，实验结论更干净。
+如果 Evo checkpoint 不包含 Bridge/HiMem 模块，不能直接用严格 DeepSpeed resume 加载到
+`crosskv_clean` 或 `mixed_latent_clean`；需要部分加载 VLM/action-head 权重，新初始化
+Bridge/HiMem/boundary/progress/skill 模块。这个 partial pretrain loader 属于下一步工程项，
+不要和当前配置消融混在一起。
+
 ## 取哪些 VLM feature 层
 
 默认取：
@@ -261,10 +293,28 @@ skill:
 当前实现里它们只在 `mixed_latent` 中追加到 action head context。它们不是从数据里自动聚类出来的离散技能，
 也没有单独的 skill id 监督。这个消融只回答一个很窄的问题：在 mixed-latent 路径里，额外的可学习高层槽位是否有帮助。
 
+## boundary / progress 辅助监督
+
+BridgeAdapter 现在有两个辅助 head：
+
+- `boundary_head`：预测当前片段是否应该写入 HiMem。
+- `progress_head`：预测当前 trajectory / subtask 进度。
+
+训练权重不写死在代码里，而是在 `configs/training/*.yaml` 中配置：
+
+```yaml
+boundary_loss_weight: 1.0
+progress_loss_weight: 0.2
+```
+
+stage1 warm-up 默认设为 `0.0`，避免在 action-head 对齐前引入额外变量；stage2 默认开启，
+让 `memory.segment.write_policy: boundary` 不再依赖完全未监督的 boundary head。
+
 ## 现在还没有做的事
 
 - action query token 注入 InternVL3 token sequence。
-- boundary head 的显式监督损失。
+- `skill_id` 的显式监督目标，例如 skill classifier 或离散 skill routing。
+- Evo-only checkpoint 到 Bridge/HiMem 模型的 partial pretrain loader。
 - trajectory batch 内的训练时 memory rollout。
 - optical-flow tokenizer 或 HiMem-WAM 的完整低层/高层动作发现。
 - 持久化跨进程 memory bank。

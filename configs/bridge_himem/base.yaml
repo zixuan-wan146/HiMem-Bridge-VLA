@@ -6,6 +6,7 @@ vlm:
   raw_dim:
   raw_layers: [3, 7, 11, 14]
   freeze: true
+  allow_image_token_truncation: false
 
 action_query:
   source: learned_bridge

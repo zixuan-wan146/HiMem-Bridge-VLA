@@ -19,6 +19,7 @@ class VLMConfig:
     raw_dim: int | None = None
     raw_layers: tuple[int | str, ...] = (3, 7, 11, 14)
     freeze: bool = True
+    allow_image_token_truncation: bool = False
 
 
 @dataclass(frozen=True)
@@ -190,6 +191,7 @@ class BridgeHiMemConfig:
             "bridge_hidden_dim": self.vlm.hidden_dim,
             "bridge_raw_dim": self.vlm.raw_dim or self.vlm.hidden_dim,
             "bridge_raw_layers": list(self.vlm.raw_layers),
+            "allow_image_token_truncation": self.vlm.allow_image_token_truncation,
             "bridge_num_layers": self.bridge.num_layers,
             "bridge_num_heads": self.bridge.num_heads,
             "bridge_num_tokens": self.bridge.num_action_tokens,

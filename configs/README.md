@@ -20,6 +20,8 @@ Rules:
 - Experiment files use `extends` and should only override the fields that define the ablation.
 - Shared dimensions, raw VLM layers, writer settings, and segment accumulator defaults live in
   `bridge_himem/base.yaml`.
+- VLM behavior switches such as `vlm.allow_image_token_truncation` live in Bridge-HiMem YAML, not
+  in model code.
 - Validate before training:
 
 ```bash
@@ -71,6 +73,8 @@ Training profiles keep experiment hyperparameters out of shell commands. Use CLI
 machine-local overrides such as `--save_dir`, `--cache_dir`, `--resume_path`, or one-off ablations.
 The default cache path is `run_outputs/training_data_cache`; cache entries are automatically
 namespaced by the dataset config and action horizon.
+Auxiliary supervision weights such as `boundary_loss_weight` and `progress_loss_weight` are training
+profile parameters.
 
 Validate profiles before training:
 

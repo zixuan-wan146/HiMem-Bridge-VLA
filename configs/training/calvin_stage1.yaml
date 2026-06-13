@@ -11,6 +11,8 @@ vlm_name: OpenGVLab/InternVL3-1B
 lr: 1.0e-5
 dropout: 0.2
 weight_decay: 1.0e-3
+boundary_loss_weight: 0.0
+progress_loss_weight: 0.0
 batch_size: 16
 image_size: 448
 max_steps: 5000

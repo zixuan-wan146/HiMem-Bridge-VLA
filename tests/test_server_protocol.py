@@ -44,12 +44,16 @@ def test_validate_inference_request_accepts_and_pads_valid_payload():
 def test_validate_inference_request_accepts_optional_memory_fields():
     payload = valid_request()
     payload["episode_id"] = 123
+    payload["session_id"] = "client-a"
+    payload["robot_key"] = "libero"
     payload["reset_memory"] = True
     payload["return_debug"] = True
 
     request = validate_inference_request(payload, target_state_dim=6)
 
     assert request["episode_id"] == "123"
+    assert request["session_id"] == "client-a"
+    assert request["robot_key"] == "libero"
     assert request["reset_memory"] is True
     assert request["return_debug"] is True
 

@@ -32,7 +32,7 @@ from himem_bridge_vla.reproducibility import (
     set_global_seed,
     write_experiment_snapshot,
 )
-from himem_bridge_vla.training_loss import masked_flow_matching_mse
+from himem_bridge_vla.training_loss import boundary_bce_loss, masked_flow_matching_mse, progress_smooth_l1_loss
 
 torch: Any = None
 DataLoader: Any = None
@@ -141,6 +141,45 @@ def inspect_named_submodules(module_dict: dict, verbose: bool = True):
     logging.info(f"ALL TRAINABLE : {trainable_all / 1e6:.2f}M")
     logging.info(f"ALL FROZEN    : {(total_all - trainable_all) / 1e6:.2f}M")
     logging.info("=" * 70)
+
+
+def unwrap_training_model(model):
+    if accelerator is not None and hasattr(accelerator, "unwrap_model"):
+        return accelerator.unwrap_model(model)
+    return getattr(model, "module", model)
+
+
+def validate_batch_image_masks(image_masks, step: int) -> None:
+    flat_masks = image_masks.reshape(image_masks.shape[0], -1)
+    empty_indices = torch.where(flat_masks.sum(dim=1) == 0)[0]
+    if empty_indices.numel() > 0:
+        raise ValueError(
+            f"[Step {step}] image_mask has no active image for batch indices "
+            f"{empty_indices.detach().cpu().tolist()}"
+        )
+
+
+def compute_bridge_auxiliary_loss(model, batch: dict, config: dict) -> tuple[Any, dict[str, float]]:
+    bridge_output = getattr(unwrap_training_model(model), "last_bridge_output", None)
+    if bridge_output is None:
+        return None, {}
+
+    aux_loss = None
+    metrics: dict[str, float] = {}
+    boundary_weight = float(config.get("boundary_loss_weight", 1.0))
+    progress_weight = float(config.get("progress_loss_weight", 0.2))
+
+    if boundary_weight > 0.0 and "boundary" in batch:
+        boundary_loss = boundary_bce_loss(bridge_output.boundary_logits, batch["boundary"])
+        aux_loss = boundary_weight * boundary_loss if aux_loss is None else aux_loss + boundary_weight * boundary_loss
+        metrics["boundary_loss"] = float(boundary_loss.detach().cpu().item())
+
+    if progress_weight > 0.0 and "progress" in batch and hasattr(bridge_output, "progress_logits"):
+        progress_loss = progress_smooth_l1_loss(bridge_output.progress_logits, batch["progress"])
+        aux_loss = progress_weight * progress_loss if aux_loss is None else aux_loss + progress_weight * progress_loss
+        metrics["progress_loss"] = float(progress_loss.detach().cpu().item())
+
+    return aux_loss, metrics
 
 
 def custom_collate_fn(batch):
@@ -325,7 +364,7 @@ def check_numerical_stability(step: int, **named_tensors) -> bool:
             return False
     return True
 
-def log_training_step(step, loss, total_norm, clipped_norm, scheduler, dataloader, accelerator):
+def log_training_step(step, loss, total_norm, clipped_norm, scheduler, dataloader, accelerator, extra_metrics=None):
     current_epoch = step / len(dataloader)
     if accelerator is None or accelerator.is_main_process:
         logging.info(f"Estimated Epoch: {current_epoch:.2f}")
@@ -336,6 +375,10 @@ def log_training_step(step, loss, total_norm, clipped_norm, scheduler, dataloade
             "current_epoch": current_epoch,
             "learning_rate": scheduler.get_last_lr()[0],
         }
+        if extra_metrics:
+            metrics.update(extra_metrics)
+            for metric_name, metric_value in sorted(extra_metrics.items()):
+                logging.info(f"[Step {step}] {metric_name}: {metric_value:.4f}")
         if WANDB_ACTIVE:
             wandb.log(metrics)
         if SWANLAB_ACTIVE:
@@ -525,6 +568,7 @@ def train(config):
 
     model, optimizer, dataloader = accelerator.prepare(model, optimizer, dataloader)
     model_engine = model  
+    unwrapped_model = unwrap_training_model(model)
     if not hasattr(model_engine, "save_checkpoint"):
         raise RuntimeError(
             "This training script currently expects DeepSpeed checkpoint support. "
@@ -583,14 +627,14 @@ def train(config):
     if accelerator.is_main_process:
         
         modules_to_inspect = {
-            "vision_model": model.embedder.model.vision_model,
-            "language_model": model.embedder.model.language_model,
-            "action_head": model.action_head,
+            "vision_model": unwrapped_model.embedder.model.vision_model,
+            "language_model": unwrapped_model.embedder.model.language_model,
+            "action_head": unwrapped_model.action_head,
         }
-        if model.bridge_adapter is not None:
-            modules_to_inspect["bridge_adapter"] = model.bridge_adapter
-        if model.memory_writer is not None:
-            modules_to_inspect["memory_writer"] = model.memory_writer
+        if unwrapped_model.bridge_adapter is not None:
+            modules_to_inspect["bridge_adapter"] = unwrapped_model.bridge_adapter
+        if unwrapped_model.memory_writer is not None:
+            modules_to_inspect["memory_writer"] = unwrapped_model.memory_writer
         inspect_named_submodules(modules_to_inspect)
 
     # === Training Loop ===
@@ -605,6 +649,7 @@ def train(config):
             actions_gt = batch["actions"].to(dtype=torch.bfloat16)
             action_mask = batch["action_mask"]
             embodiment_ids = batch["embodiment_ids"]
+            validate_batch_image_masks(image_masks, step)
             fused_tokens_list = []
             hidden_states_per_sample = []
             
@@ -658,7 +703,14 @@ def train(config):
                             f"action_mask: {action_mask}")
             
 
-            loss = masked_flow_matching_mse(pred_velocity, target_velocity, action_mask)
+            action_loss = masked_flow_matching_mse(pred_velocity, target_velocity, action_mask)
+            loss = action_loss
+            extra_metrics = {"action_loss": float(action_loss.detach().cpu().item())}
+            bridge_aux_loss, bridge_metrics = compute_bridge_auxiliary_loss(model, batch, config)
+            if bridge_aux_loss is not None:
+                loss = loss + bridge_aux_loss
+                extra_metrics.update(bridge_metrics)
+                extra_metrics["bridge_aux_loss"] = float(bridge_aux_loss.detach().cpu().item())
             
             # === NaN/Inf check ===
             if not check_numerical_stability(
@@ -683,7 +735,16 @@ def train(config):
             
             # === Logging ===
             if step % log_interval == 0:
-                log_training_step(step, loss, total_norm, clipped_norm, scheduler, dataloader, accelerator)
+                log_training_step(
+                    step,
+                    loss,
+                    total_norm,
+                    clipped_norm,
+                    scheduler,
+                    dataloader,
+                    accelerator,
+                    extra_metrics=extra_metrics,
+                )
    
             # === Save best checkpoint ===
             loss_value = loss.item()
@@ -792,6 +853,8 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--warmup_steps", type=int, default=argparse.SUPPRESS)
     parser.add_argument("--grad_clip_norm", type=float, default=argparse.SUPPRESS)
     parser.add_argument("--weight_decay", type=float, default=argparse.SUPPRESS)
+    parser.add_argument("--boundary_loss_weight", type=float, default=argparse.SUPPRESS)
+    parser.add_argument("--progress_loss_weight", type=float, default=argparse.SUPPRESS)
 
     # Logging & checkpointing
     parser.add_argument("--log_interval", type=int, default=argparse.SUPPRESS)

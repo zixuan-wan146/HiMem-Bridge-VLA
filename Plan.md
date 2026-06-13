@@ -14,13 +14,29 @@ Any older sibling checkout should be treated as a legacy reference until it is e
 
 ## Current Experiment Matrix
 
-- `baseline.yaml`: fused-token baseline, no bridge, no memory.
-- `crosskv_clean.yaml`: memory enters BridgeAttention as cross-attention K/V.
-- `mixed_latent_clean.yaml`: memory is appended to action-head context tokens.
-- `mixed_latent_skill.yaml`: mixed-latent plus learnable skill tokens.
+- `baseline.yaml`: fused-token baseline, no bridge, no memory. This is a control, not a target model.
+- `crosskv_clean.yaml`: target route A; memory enters BridgeAttention as cross-attention K/V.
+- `mixed_latent_clean.yaml`: target route B; memory is appended to action-head context tokens.
+- `mixed_latent_skill.yaml`: target route B plus learnable skill tokens.
 
 All experiment YAML files inherit `configs/bridge_himem/base.yaml`. New experiments should only
 override the fields that define the experimental difference.
+
+## Initialization Decision Point
+
+If a compatible Evo VLA checkpoint is available, prefer using it as the shared initialization for
+all CALVIN finetuning branches:
+
+```text
+Evo checkpoint
+  -> baseline.yaml control
+  -> crosskv_clean.yaml
+  -> mixed_latent_clean.yaml / mixed_latent_skill.yaml
+```
+
+If the Evo checkpoint only contains the original VLM/action-head stack, add a partial pretrain
+loader before training Bridge/HiMem variants. The current strict DeepSpeed resume path expects
+matching module keys and is only suitable for checkpoints from the same model architecture.
 
 ## Reproducibility Rules
 

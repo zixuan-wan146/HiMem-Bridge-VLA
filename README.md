@@ -125,6 +125,14 @@ cd .
 python scripts/himem_server.py --ckpt_dir checkpoints/HiMem_LIBERO --port 9000
 ```
 
+DeepSpeed checkpoints may contain non-tensor pickle metadata. The server first tries
+`torch.load(weights_only=True)`. If a trusted local DeepSpeed checkpoint requires pickle fallback,
+start through `scripts/start_himem_server.sh` with:
+
+```bash
+HIMEM_ALLOW_UNSAFE_CHECKPOINT_LOAD=1 scripts/start_himem_server.sh checkpoints/HiMem_LIBERO
+```
+
 The WebSocket request must be a JSON object with:
 
 - `image`: exactly 3 RGB image arrays with pixel values in `0..255`; images are resized by the server.
@@ -132,6 +140,9 @@ The WebSocket request must be a JSON object with:
 - `image_mask`: 0/1 mask with length at most 3; shorter masks are padded with zeros.
 - `action_mask`: 0/1 mask with length at most 24; shorter masks are padded with zeros and at least one dimension must be active.
 - `prompt`: optional task instruction string.
+- `episode_id`: optional episode memory key.
+- `session_id`: optional client/session prefix for isolating HiMem memory across concurrent clients.
+- `robot_key`: optional key for selecting one robot entry from multi-robot `norm_stats.json`.
 
 ## LIBERO Evaluation
 
@@ -347,6 +358,7 @@ The checkpoint check validates required files, basic `config.json` dimensions, a
 state/action min-max structure without loading model weights. `norm_stats.json` state/action vector
 lengths must fit the checkpoint `state_dim` and `per_action_dim`; clients may still send a 24-dim
 zero-padded `action_mask`, and the server truncates the inactive tail to the checkpoint action dim.
+If `norm_stats.json` contains multiple robot keys, inference requests must provide `robot_key`.
 
 After evaluation, validate result JSON files and run manifests before summarizing or syncing them:
 
@@ -395,6 +407,15 @@ python scripts/validate_training_dataset.py \
 The validator checks `tasks.jsonl`, `episodes.jsonl`, `stats.json` or `episodes_stats.jsonl`,
 `data/*/*.parquet`, and expected video paths derived from the dataset `view_map`.
 
+The checked-in training profiles support two initialization modes. If no compatible Evo VLA
+checkpoint is available, run `calvin_stage1.yaml` as a simple fused-token warm-up, then train the
+Bridge-HiMem variants from that checkpoint. If a compatible Evo checkpoint is available, use it as
+the shared initialization for the baseline control, `crosskv_clean`, and `mixed_latent` variants
+instead of treating `baseline_fused_only` as a target model. A plain Evo checkpoint that lacks
+Bridge/HiMem weights needs a partial pretrain loader before it can initialize `crosskv_clean` or
+`mixed_latent_clean` directly; strict DeepSpeed resume only works when the checkpoint module keys
+match the current model architecture.
+
 Run stage 1 training:
 
 ```bash
@@ -427,6 +448,15 @@ which defaults to the repository root.
 The generated training cache defaults to `run_outputs/training_data_cache` and is namespaced by the
 dataset config, dataset path, action horizon, and sample cap. Use `--cache_dir run_outputs/training_data_cache` if you
 want the cache on a data disk outside the project directory.
+
+Bridge-HiMem auxiliary supervision is configured in `configs/training/*.yaml`:
+
+- `boundary_loss_weight`: BCE loss weight for BridgeAdapter boundary logits when batch labels include `boundary`.
+- `progress_loss_weight`: Smooth L1 loss weight for sigmoid progress prediction when batch labels include `progress`.
+
+Image/token alignment behavior is configured in `configs/bridge_himem/base.yaml` under
+`vlm.allow_image_token_truncation`. It defaults to `false`; mismatched `<IMG_CONTEXT>` token counts
+and VIT embedding counts fail fast instead of silently truncating.
 
 ## Remote Deployment Notes
 

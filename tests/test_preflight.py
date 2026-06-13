@@ -180,6 +180,25 @@ def test_checkpoint_validation_accepts_required_files(tmp_path):
     assert result_levels(report) == ["OK"]
 
 
+def test_checkpoint_validation_accepts_multi_robot_norm_stats(tmp_path):
+    preflight = load_preflight_module()
+    ckpt_dir = tmp_path / "ckpt"
+    ckpt_dir.mkdir()
+    stats = valid_norm_stats()
+    stats["calvin"] = {
+        "observation.state": {"min": [0.0] * 7, "max": [1.0] * 7},
+        "action": {"min": [-1.0] * 7, "max": [1.0] * 7},
+    }
+    (ckpt_dir / "config.json").write_text(json.dumps(valid_checkpoint_config()))
+    (ckpt_dir / "norm_stats.json").write_text(json.dumps(stats))
+    (ckpt_dir / "mp_rank_00_model_states.pt").write_bytes(b"checkpoint")
+
+    report = preflight.Report()
+    preflight.check_checkpoint_dir(ckpt_dir, report)
+
+    assert result_levels(report) == ["OK"]
+
+
 def test_checkpoint_validation_rejects_missing_weight_file(tmp_path):
     preflight = load_preflight_module()
     ckpt_dir = tmp_path / "ckpt"

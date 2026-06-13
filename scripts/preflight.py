@@ -333,21 +333,20 @@ def validate_norm_stats(
     state_dim: Any = None,
     action_dim: Any = None,
 ) -> str | None:
-    if len(stats) != 1:
-        return f"expected one robot stats entry, got {len(stats)}"
-
-    robot_name, robot_stats = next(iter(stats.items()))
-    if not isinstance(robot_stats, dict):
-        return f"{robot_name} stats must be an object"
+    if not stats:
+        return "expected at least one robot stats entry"
 
     stat_dims = {
         "observation.state": _configured_dim_or_target(state_dim, target_dim),
         "action": _configured_dim_or_target(action_dim, target_dim),
     }
-    for stat_name, max_dim in stat_dims.items():
-        stat_error = _validate_minmax_stat(robot_stats, stat_name, max_dim)
-        if stat_error:
-            return f"{robot_name}.{stat_error}"
+    for robot_name, robot_stats in stats.items():
+        if not isinstance(robot_stats, dict):
+            return f"{robot_name} stats must be an object"
+        for stat_name, max_dim in stat_dims.items():
+            stat_error = _validate_minmax_stat(robot_stats, stat_name, max_dim)
+            if stat_error:
+                return f"{robot_name}.{stat_error}"
 
     return None
 

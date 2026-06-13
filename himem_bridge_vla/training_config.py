@@ -44,6 +44,8 @@ TRAINING_DEFAULTS: dict[str, Any] = {
     "num_layers": 8,
     "num_workers": 4,
     "dropout": 0.0,
+    "boundary_loss_weight": 1.0,
+    "progress_loss_weight": 0.2,
 }
 
 
@@ -131,6 +133,8 @@ POSITIVE_FLOAT_KEYS = (
 NON_NEGATIVE_FLOAT_KEYS = (
     "weight_decay",
     "dropout",
+    "boundary_loss_weight",
+    "progress_loss_weight",
 )
 
 

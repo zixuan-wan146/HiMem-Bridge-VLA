@@ -45,6 +45,7 @@ class BridgeAttentionTests(unittest.TestCase):
 
         self.assertEqual(tuple(output.bridge_tokens.shape), (2, 4, 8))
         self.assertEqual(tuple(output.boundary_logits.shape), (2, 1))
+        self.assertEqual(tuple(output.progress_logits.shape), (2, 1))
         self.assertEqual(tuple(output.raw_gate_values.shape), (2,))
         self.assertTrue(torch.allclose(output.raw_gate_values, torch.zeros_like(output.raw_gate_values)))
 

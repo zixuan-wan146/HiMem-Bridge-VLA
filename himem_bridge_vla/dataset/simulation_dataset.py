@@ -138,6 +138,15 @@ def _process_parquet_file_worker(args):
                     view_key,
                     ", ".join(adapter.view_map[view_key]),
                 )
+            if not video_paths:
+                logging.warning(
+                    "skipping %s/%s sample %s:%s because no configured video views exist",
+                    arm_name,
+                    dataset_name,
+                    parquet_path,
+                    start_idx,
+                )
+                continue
 
             first_row = sub_df.iloc[0]
             metadata = adapter.sample_metadata(first_row, parquet_path, start_idx)
@@ -473,6 +482,8 @@ class SimulationDataset(Dataset):
         num_real_views = len(images)
         image_mask = torch.zeros(self.max_views, dtype=torch.bool)
         image_mask[:num_real_views] = True 
+        if image_mask.sum().item() == 0:
+            raise ValueError(f"sample {cache_filepath} has no valid image views")
 
 
         while len(images) < self.max_views:

@@ -25,6 +25,28 @@ class TrainingLossTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "action_mask.sum"):
             training_loss.masked_flow_matching_mse(pred, target, mask)
 
+    def test_boundary_bce_loss_accepts_batch_labels(self):
+        torch = self._import_or_skip("torch")
+        training_loss = self._import_or_skip("himem_bridge_vla.training_loss")
+
+        logits = torch.tensor([[0.0], [2.0]])
+        labels = torch.tensor([0.0, 1.0])
+
+        loss = training_loss.boundary_bce_loss(logits, labels)
+
+        self.assertEqual(tuple(loss.shape), ())
+
+    def test_progress_smooth_l1_loss_accepts_batch_labels(self):
+        torch = self._import_or_skip("torch")
+        training_loss = self._import_or_skip("himem_bridge_vla.training_loss")
+
+        logits = torch.tensor([[0.0], [2.0]])
+        labels = torch.tensor([0.5, 1.0])
+
+        loss = training_loss.progress_smooth_l1_loss(logits, labels)
+
+        self.assertEqual(tuple(loss.shape), ())
+
     def _import_or_skip(self, module_name):
         try:
             return __import__(module_name, fromlist=["*"])

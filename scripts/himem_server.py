@@ -36,7 +36,29 @@ def resolve_device(device: str) -> torch.device:
     return resolved
 
 
-def load_model_and_normalizer(ckpt_dir, device: str = "cuda", inference_steps: int = 32):
+def load_checkpoint_payload(ckpt_path: Path, *, allow_unsafe_checkpoint_load: bool):
+    try:
+        return torch.load(ckpt_path, map_location="cpu", weights_only=True)
+    except Exception as exc:
+        if not allow_unsafe_checkpoint_load:
+            raise RuntimeError(
+                "Checkpoint could not be loaded with torch.load(weights_only=True). "
+                "Only enable unsafe pickle loading for trusted local DeepSpeed checkpoints."
+            ) from exc
+        logging.warning(
+            "Falling back to torch.load(weights_only=False). Only use this with trusted local checkpoints. "
+            "Original safe-load error: %s",
+            exc,
+        )
+        return torch.load(ckpt_path, map_location="cpu", weights_only=False)
+
+
+def load_model_and_normalizer(
+    ckpt_dir,
+    device: str = "cuda",
+    inference_steps: int = 32,
+    allow_unsafe_checkpoint_load: bool = False,
+):
     device = resolve_device(device)
     ckpt_dir = Path(ckpt_dir)
     config_path = ckpt_dir / "config.json"
@@ -58,14 +80,18 @@ def load_model_and_normalizer(ckpt_dir, device: str = "cuda", inference_steps: i
     config["num_inference_timesteps"] = inference_steps
 
     model = HiMemBridgeVLA(config).eval()
-    # DeepSpeed checkpoints include non-tensor metadata; load only trusted checkpoints.
-    checkpoint = torch.load(ckpt_path, map_location="cpu", weights_only=False)
+    checkpoint = load_checkpoint_payload(
+        ckpt_path,
+        allow_unsafe_checkpoint_load=allow_unsafe_checkpoint_load,
+    )
     state_dict = checkpoint["module"] if "module" in checkpoint else checkpoint
     model.load_state_dict(state_dict, strict=True)
     model = model.to(device)
 
     normalizer_dim = checkpoint_normalizer_dim(config)
-    return model, NormalizationStats(stats, target_dim=normalizer_dim)
+    normalizer = NormalizationStats(stats, target_dim=normalizer_dim)
+    logging.info("Loaded normalization stats robot_keys=%s default_robot_key=%s", normalizer.robot_keys, normalizer.robot_key)
+    return model, normalizer
 
 
 def decode_image_from_list(img_list, device) -> torch.Tensor:
@@ -102,7 +128,11 @@ def infer_from_json_dict(data: dict, model, normalizer):
             raise ValueError(f"image_size must be {expected_shape}, got {tuple(img.shape)}")
 
     state = torch.tensor(request["state"], dtype=torch.float32, device=device)
-    norm_state = normalizer.normalize_state(pad_state_tensor(state, target_dim=model_state_dim)).to(dtype=torch.float32)
+    robot_key = request["robot_key"]
+    norm_state = normalizer.normalize_state(
+        pad_state_tensor(state, target_dim=model_state_dim),
+        robot_key=robot_key,
+    ).to(dtype=torch.float32)
 
     prompt = request["prompt"]
     image_mask = torch.tensor(request["image_mask"], dtype=torch.int32, device=device)
@@ -121,12 +151,13 @@ def infer_from_json_dict(data: dict, model, normalizer):
             state_input=norm_state,
             action_mask=action_mask,
             episode_id=request["episode_id"],
+            session_id=request["session_id"],
             reset_memory=request["reset_memory"],
         )
         if action.numel() % model_action_dim != 0:
             raise ValueError(f"Model returned {action.numel()} action values, not divisible by per_action_dim={model_action_dim}")
         action = action.reshape(1, -1, model_action_dim)
-        action = normalizer.denormalize_action(action[0])
+        action = normalizer.denormalize_action(action[0], robot_key=robot_key)
         return action.cpu().numpy().tolist()
 
 
@@ -154,6 +185,11 @@ def parse_args():
     parser.add_argument("--port", type=int, default=DEFAULT_SERVER_PORT)
     parser.add_argument("--device", default="cuda")
     parser.add_argument("--inference_steps", type=int, default=32)
+    parser.add_argument(
+        "--allow_unsafe_checkpoint_load",
+        action="store_true",
+        help="Allow torch.load(weights_only=False) fallback for trusted local DeepSpeed checkpoints.",
+    )
     return parser.parse_args()
 
 
@@ -166,6 +202,7 @@ if __name__ == "__main__":
         ckpt_dir=args.ckpt_dir,
         device=args.device,
         inference_steps=args.inference_steps,
+        allow_unsafe_checkpoint_load=args.allow_unsafe_checkpoint_load,
     )
 
     async def main():

@@ -12,6 +12,7 @@ port="${HIMEM_PORT:-9000}"
 device="${HIMEM_DEVICE:-cuda:0}"
 inference_steps="${HIMEM_INFERENCE_STEPS:-1}"
 skip_preflight="${HIMEM_SKIP_PREFLIGHT:-0}"
+allow_unsafe_checkpoint_load="${HIMEM_ALLOW_UNSAFE_CHECKPOINT_LOAD:-0}"
 
 if [ -z "$ckpt_dir" ]; then
   printf 'Usage: HIMEM_PYTHON=.venv/bin/python %s checkpoints/HiMem_LIBERO\n' "$0" >&2
@@ -41,9 +42,17 @@ if [ "$skip_preflight" != "1" ]; then
     --skip-shell-syntax
 fi
 
-exec "$python_bin" scripts/himem_server.py \
-  --ckpt_dir "$ckpt_dir" \
-  --host "$host" \
-  --port "$port" \
-  --device "$device" \
+server_args=(
+  scripts/himem_server.py
+  --ckpt_dir "$ckpt_dir"
+  --host "$host"
+  --port "$port"
+  --device "$device"
   --inference_steps "$inference_steps"
+)
+
+if [ "$allow_unsafe_checkpoint_load" = "1" ]; then
+  server_args+=(--allow_unsafe_checkpoint_load)
+fi
+
+exec "$python_bin" "${server_args[@]}"

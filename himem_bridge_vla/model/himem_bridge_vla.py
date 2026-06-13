@@ -29,7 +29,11 @@ class HiMemBridgeVLA(nn.Module):
         self.return_cls_only = config.get("return_cls_only", False)
 
         vlm_name = config.get("vlm_name", "OpenGVLab/InternVL3-1B")
-        self.embedder = InternVL3Embedder(model_name=vlm_name, device=self._device)
+        self.embedder = InternVL3Embedder(
+            model_name=vlm_name,
+            device=self._device,
+            allow_image_token_truncation=bool(config.get("allow_image_token_truncation", False)),
+        )
 
         action_head_type = config.get("action_head", "flowmatching").lower()
         if action_head_type != "flowmatching":
@@ -214,6 +218,7 @@ class HiMemBridgeVLA(nn.Module):
         return_cls_only: Union[bool, None] = None,
         action_mask: Union[torch.Tensor, None] = None,
         episode_id: str | None = None,
+        session_id: str | None = None,
         reset_memory: bool = False,
     ) -> torch.Tensor:
         embedding_output = self.get_vl_embeddings(
@@ -230,7 +235,8 @@ class HiMemBridgeVLA(nn.Module):
             fused_tokens = embedding_output
             hidden_states = None
         state_tensor = self.prepare_state(state_input)
-        memory_context = self._read_memory(episode_id, reset_memory, fused_tokens)
+        memory_episode_id = self._memory_episode_id(episode_id, session_id)
+        memory_context = self._read_memory(memory_episode_id, reset_memory, fused_tokens)
         action = self.predict_action(
             fused_tokens,
             state_tensor,
@@ -238,7 +244,7 @@ class HiMemBridgeVLA(nn.Module):
             hidden_states=hidden_states,
             memory_context=memory_context,
         )
-        self._maybe_write_memory(episode_id)
+        self._maybe_write_memory(memory_episode_id)
         return action
 
     def forward(
@@ -339,6 +345,13 @@ class HiMemBridgeVLA(nn.Module):
         else:
             memory_tokens = self.memory_writer(self.last_bridge_output.bridge_tokens.detach())
         self.memory_runtime.write(episode_id, memory_tokens, gate=boundary_prob)
+
+    def _memory_episode_id(self, episode_id: str | None, session_id: str | None = None) -> str | None:
+        if not episode_id:
+            return None
+        if not session_id:
+            return str(episode_id)
+        return f"{session_id}:{episode_id}"
 
     def _freeze_module(self, module: nn.Module, name: str):
         logging.info(f"Freezing {name} parameters...")

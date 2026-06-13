@@ -26,6 +26,7 @@ class BridgeAdapterConfig:
 class BridgeAdapterOutput:
     bridge_tokens: torch.Tensor
     boundary_logits: torch.Tensor
+    progress_logits: torch.Tensor
     raw_gate_values: torch.Tensor
 
 
@@ -75,6 +76,12 @@ class BridgeAdapter(nn.Module):
             nn.GELU(),
             nn.Linear(config.embed_dim, 1),
         )
+        self.progress_head = nn.Sequential(
+            nn.LayerNorm(config.embed_dim),
+            nn.Linear(config.embed_dim, config.embed_dim),
+            nn.GELU(),
+            nn.Linear(config.embed_dim, 1),
+        )
 
     def forward(
         self,
@@ -108,10 +115,12 @@ class BridgeAdapter(nn.Module):
         bridge_tokens = self.output_norm(action_tokens)
         pooled = bridge_tokens.mean(dim=1)
         boundary_logits = self.boundary_head(pooled)
+        progress_logits = self.progress_head(pooled)
         raw_gate_values = torch.stack([block.raw_gate_value.to(device=device, dtype=dtype) for block in self.blocks])
         return BridgeAdapterOutput(
             bridge_tokens=bridge_tokens,
             boundary_logits=boundary_logits,
+            progress_logits=progress_logits,
             raw_gate_values=raw_gate_values,
         )
 
