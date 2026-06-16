@@ -21,3 +21,6 @@ evaluations/libero/videos*/
 exports/
 run_outputs/
 outputs/
+!motion_boundary/outputs/
+motion_boundary/outputs/*
+!motion_boundary/outputs/README.md

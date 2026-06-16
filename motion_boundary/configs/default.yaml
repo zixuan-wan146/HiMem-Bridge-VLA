@@ -1,0 +1,56 @@
+seed: 42
+
+data:
+  format: lerobot_calvin
+  root: datasets/calvin/lerobot/task_D_D
+  boundary_jsonl: datasets/calvin/annotations/task_D_D_boundaries.jsonl
+  action_keys: [rel_actions, action, actions]
+  state_keys: [robot_obs, observation.state, state]
+  frame_keys: [frame_index, frame_idx]
+  global_frame_keys: [index, global_index, global_frame_idx]
+  episode_keys: [episode_index, episode_id]
+  window_size: 32
+  positive_radius: 2
+  ignore_radius: 6
+  hard_negative_radius: 30
+  label_sigma: 2.0
+  soft_labels: true
+  val_fraction: 0.1
+  split_by: trajectory
+
+features:
+  use_action: true
+  use_state: true
+  use_delta_action: true
+  use_delta_state: true
+  use_gripper_transition: true
+  normalize: false
+
+model:
+  hidden_dim: 128
+  kernel_size: 5
+  dilations: [1, 2, 4, 8]
+  dropout: 0.1
+  mlp_hidden_dim: 64
+
+training:
+  batch_size: 256
+  epochs: 20
+  lr: 3.0e-4
+  weight_decay: 1.0e-4
+  num_workers: 4
+  epoch_size: 20000
+  positive_ratio: 0.5
+  hard_negative_ratio: 0.25
+  pos_weight: sqrt_neg_pos
+  grad_clip_norm: 1.0
+
+evaluation:
+  event_tolerance: 3
+  cooldown: 10
+  threshold_grid: [0.05, 0.10, 0.15, 0.20, 0.25, 0.30, 0.35, 0.40, 0.45, 0.50, 0.55, 0.60, 0.65, 0.70, 0.75, 0.80, 0.85, 0.90, 0.95]
+  planner_recall_target: 0.90
+  memory_precision_target: 0.95
+
+outputs:
+  run_dir: motion_boundary/outputs/default_run
