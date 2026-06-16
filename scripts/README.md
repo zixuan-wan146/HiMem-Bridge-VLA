@@ -17,6 +17,14 @@ Scripts are grouped by responsibility. Prefer these entry points over hand-writt
 - `download_libero_checkpoint.sh`: download the LIBERO checkpoint to the data disk.
 - `start_himem_server.sh`: start the HiMem-Bridge-VLA websocket server with checkpoint preflight.
 
+## Motion Boundary Data
+
+- `download_rmbench_tasks.py`: download the official nine RMBench `demo_clean` task folders.
+- `convert_rmbench_to_motion_boundary.py`: convert RMBench HDF5 trajectories and
+  `language_annotation.json` durations into motion-boundary parquet plus boundary sidecars.
+- `convert_robomme_h5_to_motion_boundary.py`: convert RoboMME H5 tasks with native
+  `info/is_subgoal_boundary` supervision into the same motion-boundary parquet format.
+
 ## LIBERO Runs
 
 - `setup_libero_env.sh`: create or validate the LIBERO simulation environment.
@@ -26,16 +34,9 @@ Scripts are grouped by responsibility. Prefer these entry points over hand-writt
 - `init_libero_experiment.py`: create a tracked experiment skeleton.
 - `libero_profile.sh`: safe parser for `configs/libero_profiles/*.env`.
 
-## CALVIN Runs
-
-- `run_calvin_eval.sh`: CALVIN ABC->D evaluation against the HiMem-Bridge-VLA websocket server.
-- `calvin_profile.sh`: safe parser for `configs/calvin_profiles/*.env`.
-- `prepare_calvin_boundaries.py`: CALVIN boundary preprocessing helper for training data.
-
 ## Reporting
 
 - `write_libero_run_manifest.py`: write run metadata before evaluation starts.
-- `write_calvin_run_manifest.py`: write run metadata before CALVIN evaluation starts.
 - `summarize_libero_results.py`: summarize result JSON files.
 - `check_libero_metrics.py`: gate candidate runs against thresholds or baseline.
 - `report_libero_runs.py`: build inventory, summary, metric gate, and report index.

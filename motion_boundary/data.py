@@ -10,7 +10,7 @@ from typing import Any
 import numpy as np
 import pandas as pd
 import torch
-from torch.utils.data import Dataset, WeightedRandomSampler
+from torch.utils.data import Dataset, RandomSampler, Sampler, WeightedRandomSampler
 
 
 @dataclass(frozen=True)
@@ -69,7 +69,10 @@ class MotionBoundaryDataset(Dataset):
 
 def build_datasets(config: dict[str, Any]) -> tuple[MotionBoundaryDataset, MotionBoundaryDataset]:
     data_config = config["data"]
-    records = build_lerobot_calvin_records(data_config, config["features"])
+    data_format = str(data_config.get("format", "segmented_parquet"))
+    if data_format != "segmented_parquet":
+        raise ValueError(f"unsupported motion_boundary data.format: {data_format!r}")
+    records = build_segmented_parquet_records(data_config, config["features"])
     if not records:
         raise ValueError("no motion boundary records were built")
     return split_records(
@@ -80,15 +83,20 @@ def build_datasets(config: dict[str, Any]) -> tuple[MotionBoundaryDataset, Motio
     )
 
 
-def build_lerobot_calvin_records(data_config: dict[str, Any], feature_config: dict[str, Any]) -> list[WindowRecord]:
+def build_segmented_parquet_records(data_config: dict[str, Any], feature_config: dict[str, Any]) -> list[WindowRecord]:
     root = Path(data_config["root"]).expanduser()
     boundary_path = Path(data_config["boundary_jsonl"]).expanduser()
     segments = load_boundary_segments(boundary_path)
     global_events = sorted(segment.end for segment in segments if segment.episode_id is None)
     episode_events = defaultdict(list)
+    legacy_episode_events = defaultdict(list)
     for segment in segments:
         if segment.episode_id is not None:
-            episode_events[str(segment.episode_id)].append(segment.end)
+            episode_id = str(segment.episode_id)
+            if segment.task is None:
+                legacy_episode_events[episode_id].append(segment.end)
+            else:
+                episode_events[(str(segment.task), episode_id)].append(segment.end)
 
     records: list[WindowRecord] = []
     for parquet_path in sorted(root.glob("data/*/*.parquet")):
@@ -97,12 +105,15 @@ def build_lerobot_calvin_records(data_config: dict[str, Any], feature_config: di
             continue
         trajectory_id = f"{parquet_path.parent.name}/{parquet_path.stem}"
         episode_id = _episode_id(df.iloc[0], parquet_path, data_config)
+        task_name = _task_name(df.iloc[0], parquet_path)
         task_id = _task_id(df.iloc[0])
         actions = _stack_column(df, data_config.get("action_keys", ["rel_actions", "action", "actions"]))
         states = _stack_column(df, data_config.get("state_keys", ["robot_obs", "observation.state", "state"]))
         frame_indices = _frame_indices(df, data_config)
         global_frame_indices = _global_frame_indices(df, data_config)
-        events = episode_events.get(str(episode_id))
+        events = episode_events.get((task_name, str(episode_id)))
+        if not events:
+            events = legacy_episode_events.get(str(episode_id))
         if not events:
             events = [event for event in global_events if frame_indices[0] <= event <= frame_indices[-1]]
             if global_frame_indices is not None:
@@ -202,6 +213,24 @@ def split_by_task(
     return MotionBoundaryDataset(train_records), MotionBoundaryDataset(val_records)
 
 
+def make_training_sampler(dataset: MotionBoundaryDataset, config: dict[str, Any]) -> tuple[Sampler[int] | None, bool]:
+    """Return a sampler and whether DataLoader should shuffle.
+
+    ``balanced`` keeps the original event-centered sampling policy. ``natural`` samples
+    records uniformly from the built dataset, preserving the real positive/negative ratio.
+    """
+
+    sampler_mode = str(config["training"].get("sampler", "balanced"))
+    if sampler_mode == "balanced":
+        return make_balanced_sampler(dataset, config), False
+    if sampler_mode == "natural":
+        epoch_size = int(config["training"].get("epoch_size") or 0)
+        if epoch_size > 0:
+            return RandomSampler(dataset, replacement=True, num_samples=epoch_size), False
+        return None, True
+    raise ValueError("training.sampler must be 'balanced' or 'natural'")
+
+
 def make_balanced_sampler(dataset: MotionBoundaryDataset, config: dict[str, Any]) -> WeightedRandomSampler:
     positive_ratio = float(config["training"].get("positive_ratio", 0.5))
     hard_ratio = float(config["training"].get("hard_negative_ratio", 0.25))
@@ -241,8 +270,7 @@ def _build_records_for_trajectory(
     feature_config: dict[str, Any],
 ) -> list[WindowRecord]:
     window_size = int(data_config.get("window_size", 32))
-    positive_radius = int(data_config.get("positive_radius", 2))
-    ignore_radius = int(data_config.get("ignore_radius", 6))
+    label_window = resolve_label_window(data_config)
     hard_negative_radius = int(data_config.get("hard_negative_radius", 30))
     label_sigma = float(data_config.get("label_sigma", 2.0))
     soft_labels = bool(data_config.get("soft_labels", True))
@@ -257,11 +285,11 @@ def _build_records_for_trajectory(
         if distance is None:
             continue
         abs_distance = abs(distance)
-        if abs_distance <= positive_radius:
+        if -label_window["positive_pre"] <= distance <= label_window["positive_post"]:
             label = float(np.exp(-abs_distance / label_sigma)) if soft_labels else 1.0
             valid = 1.0
             group = "positive"
-        elif abs_distance <= ignore_radius:
+        elif -label_window["ignore_pre"] <= distance <= label_window["ignore_post"]:
             label = 0.0
             valid = 0.0
             group = "ignore"
@@ -287,6 +315,53 @@ def _build_records_for_trajectory(
             )
         )
     return records
+
+
+def resolve_label_window(data_config: dict[str, Any]) -> dict[str, int]:
+    """Resolve signed label windows around an event.
+
+    Distance is ``frame_index - event_frame``. Negative means before the event,
+    positive means after the event.
+    """
+
+    mode = str(data_config.get("label_mode", "symmetric"))
+    positive_radius = int(data_config.get("positive_radius", 2))
+    ignore_radius = int(data_config.get("ignore_radius", 6))
+    presets = {
+        "symmetric": (positive_radius, positive_radius, ignore_radius, ignore_radius),
+        "event_only": (0, 0, ignore_radius, ignore_radius),
+        "pre1_post2": (1, 2, max(ignore_radius, 1), max(ignore_radius, 2)),
+        "post_only": (0, 3, ignore_radius, max(ignore_radius, 3)),
+        "custom": (positive_radius, positive_radius, ignore_radius, ignore_radius),
+    }
+    if mode not in presets:
+        raise ValueError(
+            "data.label_mode must be one of "
+            "'symmetric', 'event_only', 'pre1_post2', 'post_only', or 'custom'"
+        )
+    positive_pre, positive_post, ignore_pre, ignore_post = presets[mode]
+
+    positive_pre = _optional_int(data_config.get("positive_pre_frames"), positive_pre)
+    positive_post = _optional_int(data_config.get("positive_post_frames"), positive_post)
+    ignore_pre = _optional_int(data_config.get("ignore_pre_frames"), ignore_pre)
+    ignore_post = _optional_int(data_config.get("ignore_post_frames"), ignore_post)
+
+    if positive_pre < 0 or positive_post < 0 or ignore_pre < 0 or ignore_post < 0:
+        raise ValueError("label window sizes must be non-negative")
+    if ignore_pre < positive_pre or ignore_post < positive_post:
+        raise ValueError("ignore window must cover the positive window")
+    return {
+        "positive_pre": positive_pre,
+        "positive_post": positive_post,
+        "ignore_pre": ignore_pre,
+        "ignore_post": ignore_post,
+    }
+
+
+def _optional_int(value: Any, default: int) -> int:
+    if value is None:
+        return int(default)
+    return int(value)
 
 
 def build_features(actions: np.ndarray, states: np.ndarray, config: dict[str, Any]) -> np.ndarray:
@@ -345,6 +420,12 @@ def _episode_id(row: pd.Series, parquet_path: Path, data_config: dict[str, Any])
         if key in row and row[key] is not None:
             return str(row[key])
     return f"{parquet_path.parent.name}/{parquet_path.stem}"
+
+
+def _task_name(row: pd.Series, parquet_path: Path) -> str:
+    if "task" in row and row["task"] is not None:
+        return str(row["task"])
+    return parquet_path.parent.name
 
 
 def _task_id(row: pd.Series) -> int | None:

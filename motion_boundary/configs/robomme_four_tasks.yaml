@@ -1,0 +1,39 @@
+seed: 42
+
+data:
+  format: segmented_parquet
+  root: /root/autodl-tmp/datasets/robomme_motion_boundary/four_tasks
+  boundary_jsonl: /root/autodl-tmp/datasets/robomme_motion_boundary/four_tasks/annotations/boundaries.jsonl
+  action_keys: [action]
+  state_keys: [state]
+  frame_keys: [frame_index]
+  episode_keys: [episode_id]
+  window_size: 32
+  label_mode: symmetric
+  positive_radius: 2
+  ignore_radius: 6
+  hard_negative_radius: 30
+  label_sigma: 2.0
+  soft_labels: true
+  val_fraction: 0.1
+  split_by: trajectory
+
+features:
+  use_action: true
+  use_state: true
+  use_delta_action: true
+  use_delta_state: true
+  use_gripper_transition: true
+  normalize: false
+
+training:
+  batch_size: 256
+  epochs: 5
+  lr: 3.0e-4
+  weight_decay: 1.0e-4
+  num_workers: 4
+  epoch_size: 20000
+  sampler: balanced
+
+outputs:
+  run_dir: /root/autodl-tmp/runs/motion_boundary/robomme_four_tasks
