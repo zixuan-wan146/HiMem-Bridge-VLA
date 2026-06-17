@@ -102,7 +102,7 @@ def test_validate_configured_datasets_rejects_invalid_stats(tmp_path: Path):
     assert any(issue.level == "FAIL" and "same length" in issue.message for issue in issues)
 
 
-def test_validate_configured_datasets_accepts_calvin_stat_aliases(tmp_path: Path):
+def test_validate_configured_datasets_accepts_configured_stat_aliases(tmp_path: Path):
     dataset_path = create_minimal_dataset(tmp_path)
     (dataset_path / "meta" / "stats.json").write_text(
         json.dumps(

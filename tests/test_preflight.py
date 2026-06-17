@@ -185,7 +185,7 @@ def test_checkpoint_validation_accepts_multi_robot_norm_stats(tmp_path):
     ckpt_dir = tmp_path / "ckpt"
     ckpt_dir.mkdir()
     stats = valid_norm_stats()
-    stats["calvin"] = {
+    stats["other_robot"] = {
         "observation.state": {"min": [0.0] * 7, "max": [1.0] * 7},
         "action": {"min": [-1.0] * 7, "max": [1.0] * 7},
     }

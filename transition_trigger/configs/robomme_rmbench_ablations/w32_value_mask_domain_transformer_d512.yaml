@@ -1,0 +1,127 @@
+seed: 42
+
+data:
+  format: multi_segmented_parquet
+  split_by: manifest
+  split_manifest: /root/autodl-tmp/datasets/transition_trigger_splits/robomme_rmbench_causal_v1.json
+  train_split: train
+  eval_split: eval
+  test_split: test
+  window_size: 32
+  label_mode: causal_post
+  positive_radius: 2
+  ignore_radius: 6
+  positive_min_delay: 1
+  positive_max_delay: 5
+  ignore_min_delay: -6
+  ignore_max_delay: 0
+  hard_negative_radius: 30
+  label_sigma: 2.0
+  soft_labels: true
+  val_fraction: 0.1
+  datasets:
+    - name: robomme_four_tasks
+      root: /root/autodl-tmp/datasets/robomme_transition_trigger/four_tasks
+      transition_jsonl: /root/autodl-tmp/datasets/robomme_transition_trigger/four_tasks/annotations/transitions.jsonl
+      frame_keys: [frame_index]
+      episode_keys: [episode_id]
+      features:
+        blocks:
+          - {name: left_action, key: action, dim: 7, valid: 1.0}
+          - {name: right_action, dim: 7, valid: 0.0}
+          - {name: left_eef_pose, key: eef_state, dim: 7, valid: 1.0}
+          - {name: right_eef_pose, dim: 7, valid: 0.0}
+          - {name: left_joint_state, key: joint_state, dim: 7, valid: 1.0}
+          - {name: right_joint_state, dim: 7, valid: 0.0}
+          - {name: left_gripper, key: gripper_state, dim: 2, valid: 1.0}
+          - {name: right_gripper, dim: 2, valid: 0.0}
+          - {name: left_active, constant: [1.0], dim: 1, valid: 1.0}
+          - {name: right_active, constant: [0.0], dim: 1, valid: 1.0}
+    - name: rmbench_9tasks
+      root: /root/autodl-tmp/datasets/rmbench_transition_trigger/nine_tasks
+      transition_jsonl: /root/autodl-tmp/datasets/rmbench_transition_trigger/nine_tasks/annotations/transitions.jsonl
+      frame_keys: [frame_index]
+      episode_keys: [episode_id]
+      features:
+        blocks:
+          - name: left_action
+            dim: 7
+            valid: 1.0
+            sources:
+              - {key: left_joint_action, length: 6}
+              - {key: left_gripper_action, length: 1}
+          - name: right_action
+            dim: 7
+            valid: 1.0
+            sources:
+              - {key: right_joint_action, length: 6}
+              - {key: right_gripper_action, length: 1}
+          - {name: left_eef_pose, key: left_endpose, dim: 7, valid: 1.0}
+          - {name: right_eef_pose, key: right_endpose, dim: 7, valid: 1.0}
+          - {name: left_joint_state, dim: 7, valid: 0.0}
+          - {name: right_joint_state, dim: 7, valid: 0.0}
+          - {name: left_gripper, key: left_gripper, dim: 2, valid: 1.0}
+          - {name: right_gripper, key: right_gripper, dim: 2, valid: 1.0}
+          - {name: left_active, constant: [1.0], dim: 1, valid: 1.0}
+          - {name: right_active, constant: [1.0], dim: 1, valid: 1.0}
+
+features:
+  mode: canonical_blocks
+  feature_set: value_mask_domain
+  expected_input_dim: 98
+  include_deltas: false
+  include_value_mask: true
+  source_one_hot:
+    enabled: true
+    names: [robomme_four_tasks, rmbench_9tasks]
+  normalize: false
+
+model:
+  type: transformer
+  d_model: 512
+  num_layers: 4
+  state_dim: 64
+  num_heads: 8
+  mlp_ratio: 4.0
+  max_seq_len: 64
+  pooling: last
+  head_hidden_dim: 512
+  dropout: 0.1
+
+training:
+  batch_size: 2816
+  epochs: 10
+  lr: 3.0e-4
+  weight_decay: 1.0e-4
+  num_workers: 4
+  epoch_size: 200000
+  sampler: balanced
+  positive_ratio: 0.45
+  hard_negative_ratio: 0.35
+  loss: bce
+  pos_weight: sqrt_neg_pos
+  focal_gamma: 2.0
+  focal_alpha: null
+  grad_clip_norm: 1.0
+
+evaluation:
+  event_tolerance: 3
+  match_min_delay: 1
+  match_max_delay: 5
+  early_tolerance: 6
+  cooldown: 10
+  threshold_grid: [0.20, 0.30, 0.40, 0.50, 0.60, 0.70, 0.80, 0.85, 0.90, 0.95]
+  planner_recall_target: 0.90
+  planner_precision_floor: 0.0
+  memory_write_fixed_threshold: 0.80
+  memory_precision_target: 0.80
+  memory_recall_floor: 0.0
+  dataset_split: eval
+
+trigger_policy:
+  planner_threshold: 0.50
+  memory_write_threshold: 0.80
+  memory_write_implies_plan: true
+
+outputs:
+  run_dir: /root/autodl-tmp/runs/transition_trigger/robomme_rmbench_ablations/w32_value_mask_domain_transformer_d512

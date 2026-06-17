@@ -71,7 +71,6 @@ def _git_is_dirty(repo_root: Path) -> bool | None:
 
 def _safe_environment(environ: Mapping[str, str], repo_root: Path) -> dict[str, str]:
     allowed_exact = {
-        "CALVIN_ROOT",
         "HF_ENDPOINT",
         "HUGGINGFACE_HUB_CACHE",
         "HF_HOME",

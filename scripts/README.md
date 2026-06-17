@@ -17,12 +17,12 @@ Scripts are grouped by responsibility. Prefer these entry points over hand-writt
 - `download_libero_checkpoint.sh`: download the LIBERO checkpoint to the data disk.
 - `start_himem_server.sh`: start the HiMem-Bridge-VLA websocket server with checkpoint preflight.
 
-## Motion Boundary Data
+## Transition Trigger Data
 
 - `download_rmbench_tasks.py`: download the official nine RMBench `demo_clean` task folders.
-- `convert_rmbench_to_motion_boundary.py`: convert RMBench HDF5 trajectories and
+- `convert_rmbench_to_transition_trigger.py`: convert RMBench HDF5 trajectories and
   `language_annotation.json` durations into motion-boundary parquet plus boundary sidecars.
-- `convert_robomme_h5_to_motion_boundary.py`: convert RoboMME H5 tasks with native
+- `convert_robomme_h5_to_transition_trigger.py`: convert RoboMME H5 tasks with native
   `info/is_subgoal_boundary` supervision into the same motion-boundary parquet format.
 
 ## LIBERO Runs

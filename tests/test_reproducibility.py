@@ -42,7 +42,7 @@ def test_write_experiment_snapshot_writes_environment_json(tmp_path, monkeypatch
     monkeypatch.chdir(REPO_ROOT)
     save_dir = tmp_path / "snapshot"
 
-    write_experiment_snapshot(save_dir, {"repo_root": ".", "dataset_config_path": "configs/datasets/calvin.yaml"})
+    write_experiment_snapshot(save_dir, {"repo_root": ".", "dataset_config_path": "configs/datasets/simulation.yaml"})
 
     assert (save_dir / "resolved_config.json").exists()
     assert (save_dir / "reproducibility.json").exists()

@@ -114,10 +114,6 @@ run_step \
   env HIMEM_LIBERO_DRY_RUN=1 HIMEM_LIBERO_PROFILE=configs/libero_profiles/full_eval.env \
   scripts/run_libero_eval.sh
 run_step \
-  "CALVIN eval profile dry-run" \
-  env HIMEM_CALVIN_DRY_RUN=1 HIMEM_CALVIN_PROFILE=configs/calvin_profiles/full_eval.env \
-  scripts/run_calvin_eval.sh
-run_step \
   "LIBERO experiment init dry-run" \
   "$python_bin" scripts/init_libero_experiment.py \
   --dry-run \

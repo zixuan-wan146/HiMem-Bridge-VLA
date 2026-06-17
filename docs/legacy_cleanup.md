@@ -1,7 +1,7 @@
 # Legacy Workspace Cleanup
 
 Use this note only when retiring an older sibling checkout. The active workspace is `HiMem-Bridge-VLA`,
-which contains BridgeAttention, HiMem, YAML configs, CALVIN tooling, documentation, and tests.
+which contains BridgeAttention, HiMem, YAML configs, documentation, and tests.
 
 ## Current Check
 
@@ -18,7 +18,7 @@ As of the latest local check:
   - `himem_bridge_vla/model/himem/`
   - `configs/bridge_himem/`
   - `docs/`
-  - Bridge/HiMem/CALVIN tests
+  - Bridge/HiMem tests
 
 ## Recommendation
 

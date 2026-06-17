@@ -41,7 +41,8 @@ def main() -> int:
 
     paths = args.configs or sorted((REPO_ROOT / "configs" / "training").glob("*.yaml"))
     if not paths:
-        raise FileNotFoundError("No training YAML profiles found")
+        print("validated 0 training config(s); configs/training is empty")
+        return 0
 
     for path in paths:
         config_path = _resolve_config_path(path)

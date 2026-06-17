@@ -23,8 +23,8 @@ def test_default_dataset_cache_dir_accepts_explicit_repo_root(tmp_path: Path):
 
 def test_dataset_cache_namespace_is_stable_for_mapping_order(tmp_path: Path):
     dataset_path = tmp_path / "dataset"
-    config_a = {"path": str(dataset_path), "view_map": {"image_1": ["rgb", "wrist"]}, "adapter": "calvin"}
-    config_b = {"adapter": "calvin", "view_map": {"image_1": ["rgb", "wrist"]}, "path": str(dataset_path)}
+    config_a = {"path": str(dataset_path), "view_map": {"image_1": ["rgb", "wrist"]}, "adapter": "generic"}
+    config_b = {"adapter": "generic", "view_map": {"image_1": ["rgb", "wrist"]}, "path": str(dataset_path)}
 
     assert dataset_cache_namespace(config_a, dataset_path, action_horizon=14, max_samples_per_file=None) == (
         dataset_cache_namespace(config_b, dataset_path, action_horizon=14, max_samples_per_file=None)

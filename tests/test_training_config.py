@@ -213,13 +213,13 @@ def test_resolve_training_config_paths_keeps_outputs_project_relative(tmp_path, 
 
     resolved = resolve_training_config_paths(
         {
-            "save_dir": "run_outputs/training/calvin_stage1",
+            "save_dir": "run_outputs/training/stage1",
             "cache_dir": "checkpoints/cache",
         },
         repo_root,
     )
 
-    assert resolved["save_dir"] == "run_outputs/training/calvin_stage1"
+    assert resolved["save_dir"] == "run_outputs/training/stage1"
     assert resolved["cache_dir"] == "checkpoints/cache"
 
 

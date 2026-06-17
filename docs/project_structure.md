@@ -14,7 +14,6 @@ configs/
   datasets/*.yaml          训练数据配置
   deepspeed/*.json         DeepSpeed 配置
   libero_profiles/*.env    LIBERO smoke/full-eval 环境 profile
-  calvin_profiles/*.env    CALVIN smoke/full-eval 环境 profile
 
 himem_bridge_vla/
   bridge_himem_config.py   Bridge-HiMem YAML schema、extends 合并、参数校验
@@ -25,7 +24,6 @@ himem_bridge_vla/
   model/                   可训练模型模块，只消费已经解析好的 config
 
 evaluations/libero/         LIBERO client、action 协议、result summary
-evaluations/calvin/         CALVIN client、action 协议、result summary
 scripts/                   train/server/repo gate、preflight、下载、评估编排、报告工具
 tests/                     轻量单测，不下载模型权重
 docs/                      设计说明和工程约定
@@ -59,7 +57,7 @@ python3 scripts/validate_bridge_himem_configs.py
 
 ```bash
 python scripts/train.py \
-  --config configs/training/calvin_stage2.yaml \
+  --config configs/training/<experiment>.yaml \
   --seed 42 \
   --save_dir run_outputs/himem_runs/crosskv_clean_seed42
 ```

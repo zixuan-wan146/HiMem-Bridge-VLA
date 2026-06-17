@@ -25,7 +25,7 @@ override the fields that define the experimental difference.
 ## Initialization Decision Point
 
 If a compatible Evo VLA checkpoint is available, prefer using it as the shared initialization for
-all CALVIN finetuning branches:
+all finetuning branches:
 
 ```text
 Evo checkpoint

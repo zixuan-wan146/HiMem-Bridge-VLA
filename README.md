@@ -7,7 +7,6 @@ checked-in configs, scripts, evaluation clients, and tests.
 The repository includes the active simulation and deployment entry points:
 
 - LIBERO evaluation
-- CALVIN evaluation
 - HiMem-Bridge-VLA model server
 - training on simulation datasets
 
@@ -30,9 +29,7 @@ configs/
   datasets/                 Training dataset configs
   deepspeed/                DeepSpeed configs
   libero_profiles/          Reusable LIBERO smoke/full-eval profiles
-  calvin_profiles/          Reusable CALVIN smoke/full-eval profiles
 evaluations/libero/          LIBERO simulation evaluation client
-evaluations/calvin/          CALVIN simulation evaluation client
 scripts/                    Training, server, checks, LIBERO run tooling
 deepspeed_setup_example.txt Accelerate/DeepSpeed setup reference
 ```
@@ -79,7 +76,7 @@ PyTorch is not installed.
 `scripts/check_repo.sh` runs the local quality gate: dependency policy audit, unit tests, optional
 `ruff`, shell syntax checks, repository preflight, LIBERO setup dry-run, LIBERO checkpoint download
 dry-run, Bridge-HiMem config validation, training profile validation, LIBERO smoke/full-eval profile
-dry-runs, CALVIN eval profile dry-run, `compileall`, and `git diff --check`. Set
+dry-runs, `compileall`, and `git diff --check`. Set
 `HIMEM_CHECK_REQUIRE_RUFF=1` in CI or a fully prepared dev environment to make missing `ruff` fail
 instead of warn.
 
@@ -388,57 +385,32 @@ For a strict training-data check, add `--strict-data` after downloading the data
 
 ## Training
 
-Configure the CALVIN training dataset path in `configs/datasets/calvin.yaml`. The default path
-expects a LeRobot-style conversion under:
-
-```text
-datasets/calvin/lerobot/task_D_D
-```
+Configure the training dataset path in a project-specific YAML under `configs/datasets/`.
+The checked-in `configs/datasets/simulation.yaml` is a generic LeRobot-style example and should be
+copied or extended once the target benchmark is selected.
 
 Before starting a training run on a new dataset copy, validate the dataset structure from the
 repository root:
 
 ```bash
 python scripts/validate_training_dataset.py \
-  --dataset-config configs/datasets/calvin.yaml \
+  --dataset-config configs/datasets/simulation.yaml \
   --dataset-base-dir .
 ```
 
 The validator checks `tasks.jsonl`, `episodes.jsonl`, `stats.json` or `episodes_stats.jsonl`,
 `data/*/*.parquet`, and expected video paths derived from the dataset `view_map`.
 
-The checked-in training profiles support two initialization modes. If no compatible Evo VLA
-checkpoint is available, run `calvin_stage1.yaml` as a simple fused-token warm-up, then train the
-Bridge-HiMem variants from that checkpoint. If a compatible Evo checkpoint is available, use it as
-the shared initialization for the baseline control, `crosskv_clean`, and `mixed_latent` variants
-instead of treating `baseline_fused_only` as a target model. A plain Evo checkpoint that lacks
-Bridge/HiMem weights needs a partial pretrain loader before it can initialize `crosskv_clean` or
-`mixed_latent_clean` directly; strict DeepSpeed resume only works when the checkpoint module keys
-match the current model architecture.
-
-Run stage 1 training:
+The training profiles under `configs/training/` are intentionally empty until the target benchmark
+is selected. Once a profile exists, launch training with:
 
 ```bash
 conda activate HiMem
 cd .
 
 accelerate launch --num_processes 1 --num_machines 1 --deepspeed_config_file configs/deepspeed/ds_config.json scripts/train.py \
-  --config configs/training/calvin_stage1.yaml \
-  --save_dir checkpoints/stage1
-```
-
-Run stage 2 training:
-
-```bash
-conda activate HiMem
-cd .
-
-accelerate launch --num_processes 1 --num_machines 1 --deepspeed_config_file configs/deepspeed/ds_config.json scripts/train.py \
-  --config configs/training/calvin_stage2.yaml \
-  --save_dir checkpoints/stage2 \
-  --resume \
-  --resume_pretrain \
-  --resume_path checkpoints/stage1/step_5000
+  --config configs/training/<experiment>.yaml \
+  --save_dir checkpoints/<experiment>
 ```
 
 Training profiles live in `configs/training/`. CLI arguments override profile values, so keep

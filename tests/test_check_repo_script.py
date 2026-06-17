@@ -45,7 +45,6 @@ def test_check_repo_dry_run_lists_default_gates():
     assert "DRY-RUN LIBERO checkpoint download dry-run:" in output
     assert "DRY-RUN LIBERO smoke profile dry-run:" in output
     assert "DRY-RUN LIBERO eval profile dry-run:" in output
-    assert "DRY-RUN CALVIN eval profile dry-run:" in output
     assert "DRY-RUN Python compileall:" in output
     assert "DRY-RUN Git whitespace check:" in output
     assert str(REPO_ROOT) not in output

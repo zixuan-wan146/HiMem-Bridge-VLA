@@ -19,10 +19,99 @@ import pickle
 from himem_bridge_vla.dataset.cache_utils import dataset_cache_namespace
 from himem_bridge_vla.dataset.cache_utils import default_dataset_cache_dir
 from himem_bridge_vla.utils.normalization import minmax_normalize
-try:
-    from .calvin_adapter import build_dataset_input_adapter
-except ImportError:
-    from himem_bridge_vla.dataset.calvin_adapter import build_dataset_input_adapter
+
+
+class DatasetInputAdapter:
+    """Configurable reader for LeRobot-style parquet datasets."""
+
+    def __init__(self, dataset_config: Dict[str, Any], dataset_path: Path) -> None:
+        self.dataset_config = dataset_config
+        self.dataset_path = Path(dataset_path)
+        self.view_map = dataset_config.get("view_map", {})
+        self.state_keys = dataset_config.get("state_keys", ("observation.state", "state", "robot_obs"))
+        self.action_keys = dataset_config.get("action_keys", ("action", "actions", "rel_actions"))
+        self.task_index_keys = dataset_config.get("task_index_keys", ("task_index",))
+        self.frame_keys = dataset_config.get("frame_keys", ("frame_index", "frame_idx"))
+        self.episode_keys = dataset_config.get("episode_keys", ("episode_index", "episode_id"))
+
+    def resolve_video_paths(self, base_video_path: Path, parquet_path: Path) -> Dict[str, str]:
+        resolved = {}
+        for view_key, aliases in self.view_map.items():
+            for alias in _as_tuple(aliases):
+                candidates = [
+                    base_video_path / alias / f"{parquet_path.stem}.mp4",
+                    base_video_path / alias.replace(".", "/") / f"{parquet_path.stem}.mp4",
+                ]
+                for candidate in candidates:
+                    if candidate.exists():
+                        resolved[view_key] = str(candidate)
+                        break
+                if view_key in resolved:
+                    break
+        return resolved
+
+    def sample_metadata(self, row: pd.Series, parquet_path: Path, row_index: int) -> Dict[str, Any]:
+        metadata = {
+            "row_index": int(row_index),
+            "source_parquet": str(parquet_path),
+        }
+        task_index = _first_row_value(row, self.task_index_keys)
+        frame_index = _first_row_value(row, self.frame_keys)
+        episode_id = _first_row_value(row, self.episode_keys)
+        if task_index is not None:
+            metadata["task_index"] = int(task_index)
+        if frame_index is not None:
+            metadata["frame_index"] = int(frame_index)
+        if episode_id is not None:
+            metadata["episode_id"] = str(episode_id)
+        return metadata
+
+    def prompt(self, row: pd.Series, task_mapping: Dict[int, str], metadata: Dict[str, Any]) -> str:
+        task_index = metadata.get("task_index")
+        if task_index is not None and int(task_index) in task_mapping:
+            return task_mapping[int(task_index)]
+        for key in ("task", "language", "instruction", "prompt"):
+            if key in row and row[key] is not None:
+                return str(row[key])
+        return ""
+
+    def state(self, row: pd.Series) -> list[float]:
+        return _row_array(row, self.state_keys).astype(float).tolist()
+
+    def action(self, row: pd.Series) -> list[float]:
+        return _row_array(row, self.action_keys).astype(float).tolist()
+
+    def timestamp(self, row: pd.Series, row_index: int) -> float:
+        if "timestamp" in row and row["timestamp"] is not None:
+            return float(np.asarray(row["timestamp"]).reshape(-1)[0])
+        return float(row_index)
+
+
+def build_dataset_input_adapter(dataset_config: Dict[str, Any], dataset_path: Path) -> DatasetInputAdapter:
+    adapter = dataset_config.get("adapter", "generic")
+    if adapter not in {"generic", "lerobot"}:
+        raise ValueError(f"unsupported dataset adapter: {adapter!r}")
+    return DatasetInputAdapter(dataset_config, dataset_path)
+
+
+def _as_tuple(value):
+    if isinstance(value, (list, tuple)):
+        return tuple(value)
+    return (value,)
+
+
+def _first_row_value(row: pd.Series, keys) -> Any:
+    for key in _as_tuple(keys):
+        if key in row and row[key] is not None:
+            return row[key]
+    return None
+
+
+def _row_array(row: pd.Series, keys) -> np.ndarray:
+    for key in _as_tuple(keys):
+        if key in row and row[key] is not None:
+            return np.asarray(row[key], dtype=np.float32).reshape(-1)
+    raise KeyError(f"none of the configured row keys are present: {tuple(_as_tuple(keys))}")
 
 def compute_normalization_stats_from_minmax(jsonl_path, dataset_config=None):
     state_mins, state_maxs = [], []

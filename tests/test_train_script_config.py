@@ -26,15 +26,14 @@ def test_train_help_does_not_require_training_runtime():
     assert "--dataset_config_path" in result.stdout
 
 
-def test_build_training_config_merges_yaml_and_cli_overrides():
+def test_build_training_config_uses_defaults_and_cli_overrides():
     train_script = _load_train_script()
-    config_path = "configs/training/calvin_stage1.yaml"
     args = train_script.build_arg_parser().parse_args(
         [
-            "--config",
-            config_path,
             "--batch_size",
             "3",
+            "--dataset_config_path",
+            "configs/datasets/simulation.yaml",
             "--save_dir",
             "run_outputs/training/from_cli",
         ]
@@ -43,9 +42,8 @@ def test_build_training_config_merges_yaml_and_cli_overrides():
     config = train_script.build_training_config(args)
 
     assert config["batch_size"] == 3
-    assert config["dataset_config_path"] == "configs/datasets/calvin.yaml"
+    assert config["dataset_config_path"] == "configs/datasets/simulation.yaml"
     assert config["save_dir"] == "run_outputs/training/from_cli"
-    assert config["training_config_path"] == config_path
 
 
 def test_build_param_groups_rejects_model_with_no_trainable_parameters():

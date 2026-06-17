@@ -16,13 +16,12 @@ def test_validate_training_configs_script_loads_default_profiles():
     )
 
     assert result.returncode == 0, result.stderr
-    assert "HiMem_calvin_stage1" in result.stdout
-    assert "HiMem_calvin_stage2" in result.stdout
+    assert "validated 0 training config(s)" in result.stdout
 
 
 def test_validate_training_configs_script_rejects_absolute_profile_paths(tmp_path):
     config_path = tmp_path / "bad.yaml"
-    absolute_dataset_path = Path("/").joinpath("datasets", "calvin.yaml")
+    absolute_dataset_path = Path("/").joinpath("datasets", "benchmark.yaml")
     config_path.write_text(
         "\n".join(
             [
