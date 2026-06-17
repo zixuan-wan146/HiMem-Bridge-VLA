@@ -24,10 +24,23 @@ himem_bridge_vla/
   model/                   可训练模型模块，只消费已经解析好的 config
 
 evaluations/libero/         LIBERO client、action 协议、result summary
+transition_trigger/         独立 transition-trigger 训练、评估、runtime、selected config
 scripts/                   train/server/repo gate、preflight、下载、评估编排、报告工具
 tests/                     轻量单测，不下载模型权重
 docs/                      设计说明和工程约定
+to-do/                     当天状态、清理计划、下一步研究决策
 ```
+
+大产物不进 git，统一放在远端数据盘：
+
+```text
+/root/autodl-tmp/runs/       训练、评估、runtime package、closed-loop run 输出
+/root/autodl-tmp/datasets/   数据集和转换后的 parquet/jsonl
+/root/autodl-tmp/checkpoints/HiMem/DeepSpeed checkpoint
+/root/autodl-tmp/hf-home/    Hugging Face cache
+```
+
+repo 内的 `runs/` 只作为远端临时评测输出目录使用，应保持 git ignored。
 
 ## 配置规则
 
@@ -72,6 +85,9 @@ python scripts/train.py \
 - `model/bridge`：只实现 BridgeAttention 和 bridge token 生成。
 - `model/himem`：只实现 memory writer、segment accumulator、episode bank。
 - `model/himem_bridge_vla.py`：只负责把 VLM、bridge、memory、action head 连接起来。
+- `transition_trigger/`：只实现独立 trigger 训练、评估、runtime policy 和 selected config，不直接依赖 LIBERO。
+- `evaluations/libero/`：只实现 LIBERO 环境交互、transition-frame 适配、trace/result 记录，不训练 trigger。
+- `scripts/himem_server.py`：只把模型服务、server protocol 和可选 transition trigger manager 连接起来。
 - `scripts/train.py`：只负责训练流程、日志、checkpoint，不新增模型结构。
 
 这几个边界以后要尽量守住。否则最容易回到“参数散在脚本里、模型里、YAML 里各一份”的状态。

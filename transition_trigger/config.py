@@ -102,8 +102,11 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "dataset_split": "eval",
     },
     "trigger_policy": {
+        "score_mode": "threshold",
         "planner_threshold": 0.5,
         "memory_write_threshold": 0.8,
+        "replan_cooldown_frames": 10,
+        "memory_write_cooldown_frames": 10,
         "memory_write_implies_plan": True,
     },
     "outputs": {

@@ -20,6 +20,7 @@ evaluations/libero/video_log_file/
 evaluations/libero/videos*/
 exports/
 run_outputs/
+runs/
 outputs/
 !transition_trigger/outputs/
 transition_trigger/outputs/*

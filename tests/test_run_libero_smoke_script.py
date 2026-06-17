@@ -44,6 +44,8 @@ def test_run_libero_smoke_script_uses_minimal_smoke_defaults():
     assert env["HIMEM_LIBERO_TASK_LIMIT"] == "1"
     assert env["HIMEM_LIBERO_MAX_STEPS"] == "1"
     assert env["HIMEM_LIBERO_HORIZON"] == "1"
+    assert env["HIMEM_LIBERO_TRANSITION_REPLAN_ACTION_LIMIT"] == "0"
+    assert env["HIMEM_LIBERO_TRANSITION_DATASET_NAME"] == ""
     assert env["HIMEM_LIBERO_CKPT_NAME"] == "HiMem_libero_smoke"
     assert env["HIMEM_LIBERO_RESULT_FILE"].endswith("HiMem_libero_smoke_results.json")
     assert env["HIMEM_LIBERO_MANIFEST_FILE"].endswith("HiMem_libero_smoke_run_manifest.json")
@@ -92,6 +94,15 @@ def test_run_libero_smoke_script_keeps_explicit_env_over_profile():
     assert result.returncode == 0, result.stderr
     env = parse_env_output(result.stdout)
     assert env["HIMEM_LIBERO_EPISODES"] == "7"
+
+
+def test_run_libero_smoke_script_keeps_transition_dataset_override():
+    result = run_smoke_script({"HIMEM_LIBERO_TRANSITION_DATASET_NAME": "robomme_four_tasks"})
+
+    assert result.returncode == 0, result.stderr
+    env = parse_env_output(result.stdout)
+    assert env["HIMEM_LIBERO_TRANSITION_DATASET_NAME"] == "robomme_four_tasks"
+    assert env["HIMEM_LIBERO_TRANSITION_TRACE_FILE"].endswith("HiMem_libero_smoke_transition_trace.jsonl")
 
 
 def test_run_libero_smoke_script_rejects_unsupported_profile_key():

@@ -220,6 +220,7 @@ class HiMemBridgeVLA(nn.Module):
         episode_id: str | None = None,
         session_id: str | None = None,
         reset_memory: bool = False,
+        memory_write_gate: torch.Tensor | float | None = None,
     ) -> torch.Tensor:
         embedding_output = self.get_vl_embeddings(
             images=images,
@@ -244,7 +245,7 @@ class HiMemBridgeVLA(nn.Module):
             hidden_states=hidden_states,
             memory_context=memory_context,
         )
-        self._maybe_write_memory(memory_episode_id)
+        self._maybe_write_memory(memory_episode_id, gate_override=memory_write_gate)
         return action
 
     def forward(
@@ -336,15 +337,18 @@ class HiMemBridgeVLA(nn.Module):
             self.memory_runtime.reset(episode_id)
         return self.memory_runtime.read(episode_id, fused_tokens)
 
-    def _maybe_write_memory(self, episode_id: str | None) -> None:
+    def _maybe_write_memory(self, episode_id: str | None, *, gate_override: torch.Tensor | float | None = None) -> None:
         if self.memory_runtime is None or not episode_id or self.last_bridge_output is None:
             return
-        boundary_prob = torch.sigmoid(self.last_bridge_output.boundary_logits.detach()).reshape(-1)
+        if gate_override is None:
+            gate = torch.sigmoid(self.last_bridge_output.boundary_logits.detach()).reshape(-1)
+        else:
+            gate = gate_override
         if self.memory_writer is None:
             memory_tokens = self.last_bridge_output.bridge_tokens.detach().mean(dim=1)
         else:
             memory_tokens = self.memory_writer(self.last_bridge_output.bridge_tokens.detach())
-        self.memory_runtime.write(episode_id, memory_tokens, gate=boundary_prob)
+        self.memory_runtime.write(episode_id, memory_tokens, gate=gate)
 
     def _memory_episode_id(self, episode_id: str | None, session_id: str | None = None) -> str | None:
         if not episode_id:

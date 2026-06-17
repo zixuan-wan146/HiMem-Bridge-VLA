@@ -18,6 +18,9 @@ def test_write_libero_run_manifest_records_run_context(tmp_path: Path):
         "HIMEM_LIBERO_RUN_DIR": "run_outputs/libero_smoke",
         "HIMEM_LIBERO_RESULT_FILE": "run_outputs/libero_smoke/results/smoke_results.json",
         "HIMEM_LIBERO_CKPT_NAME": "smoke",
+        "HIMEM_LIBERO_TRANSITION_REPLAN_ACTION_LIMIT": "1",
+        "HIMEM_LIBERO_TRANSITION_DATASET_NAME": "robomme_four_tasks",
+        "HIMEM_LIBERO_TRANSITION_TRACE_FILE": "run_outputs/libero_smoke/results/smoke_transition_trace.jsonl",
         "HIMEM_SERVER_URI": "ws://127.0.0.1:9000",
         "HIMEM_TOKEN": "should-not-be-written",
     }
@@ -47,6 +50,9 @@ def test_write_libero_run_manifest_records_run_context(tmp_path: Path):
     assert payload["run_kind"] == "smoke"
     assert payload["libero"]["HIMEM_LIBERO_CKPT_NAME"] == "smoke"
     assert payload["libero"]["HIMEM_LIBERO_RUN_DIR"] == "run_outputs/libero_smoke"
+    assert payload["libero"]["HIMEM_LIBERO_TRANSITION_REPLAN_ACTION_LIMIT"] == "1"
+    assert payload["libero"]["HIMEM_LIBERO_TRANSITION_DATASET_NAME"] == "robomme_four_tasks"
+    assert payload["libero"]["HIMEM_LIBERO_TRANSITION_TRACE_FILE"].endswith("smoke_transition_trace.jsonl")
     assert payload["libero"]["HIMEM_SERVER_URI"] == "ws://127.0.0.1:9000"
     assert payload["metadata"]["git"]["repo_root"] == "."
     assert "HIMEM_TOKEN" not in payload["metadata"]["environment"]

@@ -2,6 +2,12 @@
 
 Status: working design. This records the current direction for the transition detector, memory write, and planner trigger policy.
 
+Latest finished ablation results and the selected runtime checkpoint are recorded in:
+
+```text
+docs/transition_trigger_ablation_results.md
+```
+
 ## Core Position
 
 The transition trigger should not be trained or used as a boundary-frame oracle. A model that fires exactly on the annotated boundary frame is too close to memorizing dataset timing and is not the causal mechanism we want.
@@ -41,12 +47,12 @@ Online policy:
 execute action
 observe new state
 update motion/state history
-score = TransitionTrigger(history)
+output = transition_trigger_session.decide_window(history, frame_index=t)
 
-if score >= tau_w:
+if output.decision.memory_write:
     write_memory(completed_segment)
     hard_plan()
-elif score >= tau_p:
+elif output.decision.soft_plan:
     soft_plan()
 else:
     continue_current_plan()
@@ -60,6 +66,64 @@ tau_p: planner threshold, lower than tau_w, swept over values such as 0.2 to 0.7
 ```
 
 The planner is therefore not blocked by memory. It can replan at lower confidence for control robustness. Memory write is stricter because a bad memory entry can pollute later planning.
+
+Current selected runtime policy:
+
+```text
+score_mode = causal_peak
+planner_threshold = 0.70
+memory_write_threshold = 0.80
+replan_cooldown_frames = 10
+memory_write_cooldown_frames = 10
+memory_write_implies_plan = true
+```
+
+The online policy uses separate cooldowns. A recent soft plan suppresses repeated soft plans, but
+it must not suppress a later high-confidence memory write. Memory writes are throttled only by the
+memory-write cooldown and always emit a hard plan.
+
+`causal_peak` confirms a local score peak with one-frame delay before applying the thresholds.
+This stays causal and avoids repeatedly firing on rising score plateaus. The online integration
+must therefore keep a stateful session per rollout: `TransitionTriggerOnlineSession` for raw
+action/state blocks, or `TransitionTriggerSession` for prebuilt windows. It must not call a stateless
+single-window threshold decision.
+
+Current selected runtime model:
+
+```text
+feature_set = value_delta_mask
+window_size = 32
+model.type = transformer
+model.d_model = 512
+checkpoint = best_memory_write
+```
+
+## Runtime Integration Contract
+
+The selected trigger is usable as a standalone runtime package, but it should not be wired into the
+HiMem server by feeding arbitrary normalized model inputs. Its trained input is a 32-frame canonical
+action/state history with value, delta, and missing-value mask blocks. The integration must therefore
+own a feature adapter with the same block layout and scale as the training data.
+
+Minimum online contract:
+
+```text
+1. Keep one TransitionTriggerOnlineSession per session_id:episode_id and dataset/embodiment.
+2. After executing an action and observing the next state, append that action/state pair to the
+   canonical transition history through online.append(frame, frame_index=t).
+3. The online session returns None until 32 frames are available, then builds the exact
+   value_delta_mask window used in training.
+4. If decision.memory_write is true, commit the accumulated memory segment and force a hard plan.
+5. Else if decision.soft_plan is true, replan without writing memory.
+6. Otherwise continue the current plan while still accumulating the segment.
+```
+
+The current HiMem model still has an internal bridge-token boundary gate for memory writes. That gate
+is not equivalent to the selected transition trigger. The server integration therefore uses an
+explicit `transition_frame` request field rather than guessing features from normalized inference
+state. When that field is present and the transition trigger package is enabled, memory commits are
+routed through the transition trigger decision, with `memory_write => hard_plan` preserved as an
+invariant. Requests without `transition_frame` keep the legacy bridge-boundary memory behavior.
 
 ## Time Definitions
 
@@ -258,4 +322,3 @@ soft_plan
 hard_plan
 causal_post labels
 ```
-

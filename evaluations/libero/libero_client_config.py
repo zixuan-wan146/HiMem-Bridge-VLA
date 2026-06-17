@@ -75,6 +75,9 @@ class LiberoClientConfig:
     task_limit: int
     seed: int
     mujoco_gl: str
+    transition_replan_action_limit: int
+    transition_dataset_name: str | None
+    transition_trace_file: str | None
 
     @classmethod
     def from_env(cls, environ: Mapping[str, str] | None = None) -> "LiberoClientConfig":
@@ -86,6 +89,14 @@ class LiberoClientConfig:
         result_file = environ.get("HIMEM_LIBERO_RESULT_FILE", os.path.join(log_dir, f"{ckpt_name}_results.json"))
         task_suites = env_list(environ, "HIMEM_LIBERO_TASK_SUITES", DEFAULT_TASK_SUITES)
         max_steps = align_max_steps(env_int_list(environ, "HIMEM_LIBERO_MAX_STEPS", DEFAULT_MAX_STEPS), task_suites)
+        transition_dataset_name = _env_value(environ, "HIMEM_LIBERO_TRANSITION_DATASET_NAME")
+        transition_trace_file = _resolve_transition_trace_file(
+            environ,
+            transition_dataset_name=transition_dataset_name,
+            result_file=result_file,
+            log_dir=log_dir,
+            ckpt_name=ckpt_name,
+        )
 
         config = cls(
             horizon=env_int(environ, "HIMEM_LIBERO_HORIZON", 14),
@@ -101,6 +112,9 @@ class LiberoClientConfig:
             task_limit=env_int(environ, "HIMEM_LIBERO_TASK_LIMIT", 0),
             seed=env_int(environ, "HIMEM_LIBERO_SEED", 42),
             mujoco_gl=environ.get("HIMEM_MUJOCO_GL", "osmesa"),
+            transition_replan_action_limit=env_int(environ, "HIMEM_LIBERO_TRANSITION_REPLAN_ACTION_LIMIT", 0),
+            transition_dataset_name=transition_dataset_name,
+            transition_trace_file=transition_trace_file,
         )
         config.validate()
         return config
@@ -123,8 +137,30 @@ class LiberoClientConfig:
         invalid_max_steps = [value for value in self.max_steps if value <= 0]
         if invalid_max_steps:
             raise ValueError(f"HIMEM_LIBERO_MAX_STEPS values must be positive, got {invalid_max_steps}")
+        if self.transition_replan_action_limit < 0:
+            raise ValueError(
+                "HIMEM_LIBERO_TRANSITION_REPLAN_ACTION_LIMIT must be non-negative, "
+                f"got {self.transition_replan_action_limit}"
+            )
         if self.mujoco_gl not in {"osmesa", "egl", "glfw"}:
             raise ValueError(f"HIMEM_MUJOCO_GL must be one of osmesa, egl, glfw; got {self.mujoco_gl!r}")
+
+
+def _resolve_transition_trace_file(
+    environ: Mapping[str, str],
+    *,
+    transition_dataset_name: str | None,
+    result_file: str,
+    log_dir: str,
+    ckpt_name: str,
+) -> str | None:
+    explicit = _env_value(environ, "HIMEM_LIBERO_TRANSITION_TRACE_FILE")
+    if explicit is not None:
+        return explicit
+    if transition_dataset_name is None:
+        return None
+    result_dir = os.path.dirname(result_file) or log_dir or "."
+    return os.path.join(result_dir, f"{ckpt_name}_transition_trace.jsonl")
 
 
 def configure_mujoco_environment(

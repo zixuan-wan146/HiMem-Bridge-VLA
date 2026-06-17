@@ -17,6 +17,9 @@ def test_default_config_matches_documented_smoke_server():
     assert config.horizon == 14
     assert config.mujoco_gl == "osmesa"
     assert config.result_file == "./log_file/HiMem_libero_all_results.json"
+    assert config.transition_replan_action_limit == 0
+    assert config.transition_dataset_name is None
+    assert config.transition_trace_file is None
 
 
 def test_single_max_steps_value_expands_to_all_task_suites():
@@ -46,6 +49,39 @@ def test_result_file_can_be_overridden():
     config = LiberoClientConfig.from_env({"HIMEM_LIBERO_RESULT_FILE": "run_outputs/results.json"})
 
     assert config.result_file == "run_outputs/results.json"
+
+
+def test_transition_replan_action_limit_can_be_enabled():
+    config = LiberoClientConfig.from_env({"HIMEM_LIBERO_TRANSITION_REPLAN_ACTION_LIMIT": "1"})
+
+    assert config.transition_replan_action_limit == 1
+
+
+def test_transition_dataset_name_can_be_enabled():
+    config = LiberoClientConfig.from_env({"HIMEM_LIBERO_TRANSITION_DATASET_NAME": "robomme_four_tasks"})
+
+    assert config.transition_dataset_name == "robomme_four_tasks"
+    assert config.transition_trace_file == "./log_file/HiMem_libero_all_transition_trace.jsonl"
+
+
+def test_transition_trace_file_can_be_overridden():
+    config = LiberoClientConfig.from_env(
+        {
+            "HIMEM_LIBERO_TRANSITION_DATASET_NAME": "robomme_four_tasks",
+            "HIMEM_LIBERO_TRANSITION_TRACE_FILE": "run_outputs/trace.jsonl",
+        }
+    )
+
+    assert config.transition_trace_file == "run_outputs/trace.jsonl"
+
+
+def test_negative_transition_replan_action_limit_is_rejected():
+    try:
+        LiberoClientConfig.from_env({"HIMEM_LIBERO_TRANSITION_REPLAN_ACTION_LIMIT": "-1"})
+    except ValueError as exc:
+        assert "TRANSITION_REPLAN_ACTION_LIMIT" in str(exc)
+    else:
+        raise AssertionError("Expected negative transition replan action limit to raise ValueError")
 
 
 def test_invalid_max_steps_count_is_rejected():

@@ -44,6 +44,8 @@ def test_run_libero_eval_script_uses_full_eval_defaults():
     assert env["HIMEM_LIBERO_TASK_LIMIT"] == "0"
     assert env["HIMEM_LIBERO_MAX_STEPS"] == "25,25,25,95"
     assert env["HIMEM_LIBERO_HORIZON"] == "14"
+    assert env["HIMEM_LIBERO_TRANSITION_REPLAN_ACTION_LIMIT"] == "0"
+    assert env["HIMEM_LIBERO_TRANSITION_DATASET_NAME"] == ""
     assert env["HIMEM_LIBERO_CKPT_NAME"] == "HiMem_libero_eval"
     assert env["HIMEM_LIBERO_RESULT_FILE"].endswith("HiMem_libero_eval_results.json")
     assert env["HIMEM_LIBERO_MANIFEST_FILE"].endswith("HiMem_libero_eval_run_manifest.json")
@@ -80,6 +82,15 @@ def test_run_libero_eval_script_can_group_outputs_under_run_dir():
     assert env["HIMEM_LIBERO_LOG_FILE"] == f"{run_dir}/logs/HiMem_libero_eval.txt"
     assert env["HIMEM_LIBERO_RESULT_FILE"] == f"{run_dir}/results/HiMem_libero_eval_results.json"
     assert env["HIMEM_LIBERO_MANIFEST_FILE"] == f"{run_dir}/run_manifest.json"
+
+
+def test_run_libero_eval_script_sets_transition_trace_when_dataset_enabled():
+    result = run_eval_script({"HIMEM_LIBERO_TRANSITION_DATASET_NAME": "robomme_four_tasks"})
+
+    assert result.returncode == 0, result.stderr
+    env = parse_env_output(result.stdout)
+    assert env["HIMEM_LIBERO_TRANSITION_DATASET_NAME"] == "robomme_four_tasks"
+    assert env["HIMEM_LIBERO_TRANSITION_TRACE_FILE"].endswith("HiMem_libero_eval_transition_trace.jsonl")
 
 
 def test_run_libero_eval_script_loads_repo_relative_profile():

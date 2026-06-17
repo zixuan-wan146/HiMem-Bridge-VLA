@@ -11,9 +11,19 @@ import math
 import imageio
 import random
 
-from libero_action_protocol import parse_action_response, to_libero_action
+from libero_action_protocol import (
+    parse_action_response_with_metadata,
+    select_actions_for_transition_policy,
+    to_libero_action,
+)
 from libero_client_config import LiberoClientConfig, configure_mujoco_environment
 from libero_eval_summary import EpisodeResult, write_result_summary
+from libero_transition_frame import build_libero_transition_frame
+from libero_transition_trace import (
+    append_transition_trace,
+    build_transition_error_trace_record,
+    build_transition_trace_record,
+)
 
 args = LiberoClientConfig.from_env()
 configure_mujoco_environment(args)
@@ -53,7 +63,18 @@ def quat2axisangle(quat):
     return (quat[:3] * 2.0 * math.acos(quat[3])) / den
 
 # ========= Observation to JSON-compatible dict =========
-def obs_to_json_dict(obs, prompt, resize_size=448):
+def obs_to_json_dict(
+    obs,
+    prompt,
+    resize_size=448,
+    *,
+    episode_id: str | None = None,
+    session_id: str | None = None,
+    reset_transition_trigger: bool = False,
+    transition_dataset_name: str | None = None,
+    previous_action=None,
+    transition_frame_index: int | None = None,
+):
     img = np.ascontiguousarray(obs["agentview_image"][::-1, ::-1])
     wrist_img = np.ascontiguousarray(obs["robot0_eye_in_hand_image"][::-1, ::-1])
     dummy_proc = np.zeros((resize_size, resize_size, 3), dtype=np.uint8)
@@ -73,6 +94,22 @@ def obs_to_json_dict(obs, prompt, resize_size=448):
         "image_mask": [1, 1, 0],
         "action_mask": [1] * 7 + [0] * 17,
     }
+    if episode_id is not None:
+        data["episode_id"] = episode_id
+    if session_id is not None:
+        data["session_id"] = session_id
+    if transition_dataset_name is not None:
+        data["transition_dataset_name"] = transition_dataset_name
+        data["reset_transition_trigger"] = bool(reset_transition_trigger)
+        data["return_debug"] = True
+        if previous_action is not None:
+            data["transition_frame"] = build_libero_transition_frame(
+                obs,
+                previous_action,
+                dataset_name=transition_dataset_name,
+            )
+            if transition_frame_index is not None:
+                data["transition_frame_index"] = int(transition_frame_index)
     return data
 
 # ========= Get the environment of LIBERO =========
@@ -161,20 +198,81 @@ async def run(SERVER_URL: str, max_steps: int = None, num_episodes: int = None, 
                     decision_steps = 0
                     control_steps = 0
                     frames = []
+                    previous_transition_action = None
+                    episode_key = f"{task_suite_name}:task{task_id}:episode{ep}"
 
                     for step in range(max_steps):
                         decision_steps += 1
+                        reset_transition_trigger = step == 0
+                        transition_frame_index = control_steps if previous_transition_action is not None else None
 
-                        send_data = obs_to_json_dict(obs, prompt)
+                        send_data = obs_to_json_dict(
+                            obs,
+                            prompt,
+                            episode_id=episode_key if args.transition_dataset_name else None,
+                            session_id=args.ckpt_name if args.transition_dataset_name else None,
+                            reset_transition_trigger=reset_transition_trigger,
+                            transition_dataset_name=args.transition_dataset_name,
+                            previous_action=previous_transition_action,
+                            transition_frame_index=transition_frame_index,
+                        )
                         await ws.send(json.dumps(send_data))
                         log.debug(f"[Step {step}] Send observation")
 
                         result = await ws.recv()
                         try:
-                            actions = parse_action_response(result, horizon=horizon)
+                            parsed_response = parse_action_response_with_metadata(result, horizon=horizon)
+                            actions = select_actions_for_transition_policy(
+                                parsed_response.actions,
+                                parsed_response.transition_trigger,
+                                replan_action_limit=args.transition_replan_action_limit,
+                            )
+                            append_transition_trace(
+                                args.transition_trace_file,
+                                build_transition_trace_record(
+                                    task_suite=task_suite_name,
+                                    task_id=task_id,
+                                    episode_id=ep,
+                                    episode_key=episode_key,
+                                    task_description=prompt,
+                                    decision_step=step,
+                                    control_step_before=control_steps,
+                                    transition_frame_index=transition_frame_index,
+                                    reset_transition_trigger=reset_transition_trigger,
+                                    has_transition_frame="transition_frame" in send_data,
+                                    transition_trigger=parsed_response.transition_trigger,
+                                    raw_action_chunk_len=len(parsed_response.actions),
+                                    executed_action_chunk_len=len(actions),
+                                    replan_action_limit=args.transition_replan_action_limit,
+                                ),
+                            )
+                            if parsed_response.transition_trigger is not None:
+                                log.debug(f"[Step {step}] transition_trigger={parsed_response.transition_trigger}")
+                                if len(actions) < len(parsed_response.actions):
+                                    log.debug(
+                                        f"[Step {step}] transition replan shortened action chunk "
+                                        f"{len(parsed_response.actions)} -> {len(actions)}"
+                                    )
                             log.debug(f"[Step {step}] received actions (gripper={actions[0][6]})")
                         except Exception as e:
                             failure_reason = f"action_parse_error: {e}"
+                            append_transition_trace(
+                                args.transition_trace_file,
+                                build_transition_error_trace_record(
+                                    task_suite=task_suite_name,
+                                    task_id=task_id,
+                                    episode_id=ep,
+                                    episode_key=episode_key,
+                                    task_description=prompt,
+                                    decision_step=step,
+                                    control_step_before=control_steps,
+                                    transition_frame_index=transition_frame_index,
+                                    reset_transition_trigger=reset_transition_trigger,
+                                    has_transition_frame="transition_frame" in send_data,
+                                    error=e,
+                                    response_preview=result,
+                                ),
+                            )
                             log.error(f"Action parsing failed: {e}, content: {result}")
                             break
 
@@ -185,6 +283,8 @@ async def run(SERVER_URL: str, max_steps: int = None, num_episodes: int = None, 
                             try:
                                 obs, reward, done, info = env.step(action)
                                 control_steps += 1
+                                if args.transition_dataset_name:
+                                    previous_transition_action = action
                             except ValueError as ve:
                                 failure_reason = f"invalid_action: {ve}"
                                 log.error(f"Action is not valid: {ve}")

@@ -19,6 +19,13 @@ Current causal memory-write and replan design notes live in:
 docs/causal_memory_replan_design.md
 ```
 
+Completed ablation results and the selected runtime model live in:
+
+```text
+docs/transition_trigger_ablation_results.md
+transition_trigger/configs/selected/robomme_rmbench_w32_value_delta_transformer_d512.yaml
+```
+
 ## Module Question
 
 The module should answer one narrow question:
@@ -132,6 +139,107 @@ Important difference from action-jump detectors:
 ```text
 TransitionTriggerHead input is canonical action/state blocks plus explicit missing-field masks.
 ```
+
+Current selected model:
+
+```text
+feature_set: value_delta_mask
+window_size: 32
+model.type: transformer
+model.d_model: 512
+checkpoint type: best_memory_write
+runtime score_mode: causal_peak
+planner_threshold: 0.70
+memory_write_threshold: 0.80
+```
+
+Runtime loading:
+
+```python
+from transition_trigger.runtime import load_selected_trigger
+
+trigger = load_selected_trigger(device="cuda")
+online = trigger.new_online_session(dataset_name="robomme_four_tasks")
+
+for frame_idx, frame in rollout_frames:
+    # frame contains the raw canonical blocks used by the selected config,
+    # e.g. action/eef_state/joint_state/gripper_state for RoboMME.
+    output = online.append(frame, frame_index=frame_idx)
+    if output is None:
+        continue
+
+    if output.decision.memory_write:
+        write_memory()
+        hard_plan()
+    elif output.decision.soft_plan:
+        soft_plan()
+```
+
+For the selected `causal_peak` runtime policy, use `trigger.score_window(...)`
+for pure batched scoring, `trigger.new_session().decide_window(...)` when the
+caller already owns `[32, 144]` windows, and `trigger.new_online_session(...)`
+when the caller owns raw action/state blocks. The stateless
+`trigger.decide_window(...)` path is only valid for `score_mode: threshold`.
+
+Online replay evaluation:
+
+```bash
+python transition_trigger/scripts/evaluate_runtime_policy.py \
+  --package-dir /root/autodl-tmp/runs/transition_trigger/selected/robomme_rmbench_w32_value_delta_transformer_d512 \
+  --split test \
+  --device cuda
+```
+
+Optional HiMem server integration:
+
+```bash
+python scripts/himem_server.py \
+  --ckpt_dir checkpoints/HiMem_LIBERO \
+  --transition_trigger_package /root/autodl-tmp/runs/transition_trigger/selected/robomme_rmbench_w32_value_delta_transformer_d512 \
+  --transition_dataset_name robomme_four_tasks
+```
+
+Requests should include a stable `episode_id` or `session_id` and a `transition_frame`
+containing the raw canonical keys for the selected schema. With `return_debug: true`,
+the response is an object with `actions` and `transition_trigger`; otherwise it remains
+the legacy action list. The LIBERO action parser accepts both formats. `transition_trigger`
+contains `ready`, `score`, `memory_write`, `soft_plan`, and `hard_plan`. When
+`transition_frame` is present, the server routes HiMem memory writes through the
+transition-trigger decision: memory is accumulated while the trigger is not ready or
+below threshold, and committed only when `memory_write` is true.
+
+For chunked action clients such as LIBERO, `HIMEM_LIBERO_TRANSITION_REPLAN_ACTION_LIMIT`
+controls whether a transition-trigger event shortens the returned action chunk:
+
+```bash
+HIMEM_LIBERO_TRANSITION_REPLAN_ACTION_LIMIT=0  # default, execute the full chunk
+HIMEM_LIBERO_TRANSITION_REPLAN_ACTION_LIMIT=1  # execute one action, then request a fresh plan
+```
+
+LIBERO can optionally send a RoboMME-like transition frame built from the previous executed
+action and the current observation:
+
+```bash
+HIMEM_LIBERO_TRANSITION_DATASET_NAME=robomme_four_tasks
+HIMEM_LIBERO_TRANSITION_REPLAN_ACTION_LIMIT=1
+```
+
+This adapter maps LIBERO observations to the selected single-arm schema:
+`action`, `eef_state`, `joint_state`, and `gripper_state`. It is useful for closed-loop
+smoke tests, but should be treated as a cross-benchmark approximation until validated by
+success-rate and step-count comparisons. Both switches are recorded in the LIBERO run manifest.
+
+When a transition dataset is enabled, the LIBERO client writes a per-decision JSONL trace by
+default:
+
+```bash
+HIMEM_LIBERO_TRANSITION_TRACE_FILE=<result-dir>/<ckpt-name>_transition_trace.jsonl
+```
+
+Each row records the task/episode/step, whether a `transition_frame` was sent, the returned
+`score`, `ready`, `soft_plan`, `hard_plan`, `memory_write`, `should_plan`, and whether the action
+chunk was shortened by `HIMEM_LIBERO_TRANSITION_REPLAN_ACTION_LIMIT`. Override
+`HIMEM_LIBERO_TRANSITION_TRACE_FILE` to choose a different path.
 
 ## Evaluation
 
