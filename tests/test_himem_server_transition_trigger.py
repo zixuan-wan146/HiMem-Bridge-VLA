@@ -3,7 +3,9 @@ from __future__ import annotations
 import importlib.util
 from pathlib import Path
 
-import torch
+import pytest
+
+torch = pytest.importorskip("torch")
 
 from himem_bridge_vla.transition_trigger_manager import TransitionTriggerServerResult
 
@@ -45,12 +47,14 @@ class FakeModel:
     def __init__(self) -> None:
         self._parameter = torch.nn.Parameter(torch.zeros(1))
         self.last_memory_write_gate = None
+        self.last_coarse_plan_refresh = None
 
     def parameters(self):
         return iter([self._parameter])
 
     def run_inference(self, **kwargs):
         self.last_memory_write_gate = kwargs.get("memory_write_gate")
+        self.last_coarse_plan_refresh = kwargs.get("coarse_plan_refresh")
         return torch.tensor([[0.0, 1.0, 2.0, 3.0, 4.0, 5.0, 0.6]], dtype=torch.float32)
 
 
@@ -147,6 +151,7 @@ def test_infer_from_json_dict_returns_transition_debug_and_gate(monkeypatch):
     assert response["transition_trigger"]["hard_plan"] is True
     assert response["transition_trigger"]["memory_write"] is True
     assert model.last_memory_write_gate == 1.0
+    assert model.last_coarse_plan_refresh is True
 
 
 def test_infer_from_json_dict_keeps_legacy_response_without_debug(monkeypatch):
@@ -158,3 +163,16 @@ def test_infer_from_json_dict_keeps_legacy_response_without_debug(monkeypatch):
 
     assert response == [[0.0, 1.0, 2.0, 3.0, 4.0, 5.0, 0.6000000238418579]]
     assert model.last_memory_write_gate is None
+    assert model.last_coarse_plan_refresh is False
+
+
+def test_infer_from_json_dict_uses_reset_transition_as_plan_refresh(monkeypatch):
+    server = load_server_module()
+    monkeypatch.setattr(server, "decode_image_from_list", lambda img, device: torch.zeros(3, 448, 448, device=device))
+    model = FakeModel()
+    payload = valid_payload()
+    payload["reset_transition_trigger"] = True
+
+    server.infer_from_json_dict(payload, model, FakeNormalizer(), transition_manager=None)
+
+    assert model.last_coarse_plan_refresh is True

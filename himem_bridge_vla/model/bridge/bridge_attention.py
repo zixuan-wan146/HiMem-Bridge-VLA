@@ -10,7 +10,7 @@ class BridgeAttentionBlock(nn.Module):
     """VLA-Adapter style bridge block for action-latent conditioning.
 
     The block keeps separate paths for action-token self-attention, raw VLM
-    feature cross-attention, and action-query/proprio/memory cross-attention.
+    feature cross-attention, and action-query/proprio/plan/memory cross-attention.
     Raw VLM injection is gated with a zero-initialized tanh gate by default.
     """
 
@@ -66,6 +66,7 @@ class BridgeAttentionBlock(nn.Module):
         raw_features: torch.Tensor,
         action_query_features: torch.Tensor,
         proprio_embedding: torch.Tensor | None = None,
+        plan_tokens: torch.Tensor | None = None,
         memory_context: torch.Tensor | None = None,
         raw_key_padding_mask: torch.Tensor | None = None,
         query_key_padding_mask: torch.Tensor | None = None,
@@ -85,6 +86,10 @@ class BridgeAttentionBlock(nn.Module):
 
         if proprio_embedding is not None:
             conditions.append(_ensure_rank3(proprio_embedding, "proprio_embedding"))
+        if plan_tokens is not None:
+            plan_tokens = _ensure_rank3(plan_tokens, "plan_tokens")
+            if plan_tokens.shape[1] > 0:
+                conditions.append(plan_tokens)
         if memory_context is not None:
             memory_context = _ensure_rank3(memory_context, "memory_context")
             if memory_context.shape[1] > 0:

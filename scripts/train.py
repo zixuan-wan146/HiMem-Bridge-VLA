@@ -32,7 +32,12 @@ from himem_bridge_vla.reproducibility import (
     set_global_seed,
     write_experiment_snapshot,
 )
-from himem_bridge_vla.training_loss import boundary_bce_loss, masked_flow_matching_mse, progress_smooth_l1_loss
+from himem_bridge_vla.training_loss import (
+    boundary_bce_loss,
+    coarse_planner_smooth_l1_loss,
+    masked_flow_matching_mse,
+    progress_smooth_l1_loss,
+)
 
 torch: Any = None
 DataLoader: Any = None
@@ -182,6 +187,27 @@ def compute_bridge_auxiliary_loss(model, batch: dict, config: dict) -> tuple[Any
     return aux_loss, metrics
 
 
+def compute_coarse_planner_loss(model, batch: dict, config: dict) -> tuple[Any, dict[str, float]]:
+    planner_output = getattr(unwrap_training_model(model), "last_coarse_planner_output", None)
+    if planner_output is None or "coarse_actions" not in batch or "coarse_action_mask" not in batch:
+        return None, {}
+
+    planner_loss = coarse_planner_smooth_l1_loss(
+        planner_output.coarse_actions,
+        batch["coarse_actions"],
+        batch["coarse_action_mask"],
+        gripper_indices=config.get("coarse_planner_gripper_indices", [-1]),
+        gripper_loss_weight=float(config.get("coarse_planner_gripper_loss_weight", 2.0)),
+        smoothness_weight=float(config.get("coarse_planner_smoothness_weight", 0.01)),
+    )
+    loss_weight = float(config.get("coarse_planner_loss_weight", 0.2))
+    weighted_loss = loss_weight * planner_loss
+    return weighted_loss, {
+        "coarse_planner_loss": float(planner_loss.detach().cpu().item()),
+        "coarse_planner_loss_weighted": float(weighted_loss.detach().cpu().item()),
+    }
+
+
 def custom_collate_fn(batch):
     prompts = [item["prompt"] for item in batch]
     images = [item["images"] for item in batch]
@@ -201,6 +227,9 @@ def custom_collate_fn(batch):
         "embodiment_ids": embodiment_ids
     }
     for optional_key in ("boundary", "progress", "skill_id"):
+        if all(optional_key in item for item in batch):
+            batch_dict[optional_key] = torch.stack([item[optional_key] for item in batch], dim=0)
+    for optional_key in ("coarse_actions", "coarse_action_mask"):
         if all(optional_key in item for item in batch):
             batch_dict[optional_key] = torch.stack([item[optional_key] for item in batch], dim=0)
     for optional_key in ("episode_id", "frame_index", "global_frame_index", "segment_id", "segment_start", "segment_end"):
@@ -313,7 +342,8 @@ def prepare_dataset(config: dict) -> torch.utils.data.Dataset:
             action_horizon=horizon,
             binarize_gripper=binarize_gripper,
             cache_dir=config.get("cache_dir"),
-            use_augmentation=use_augmentation
+            use_augmentation=use_augmentation,
+            coarse_action_config=build_coarse_action_dataset_config(config),
         )
     else:
         raise ValueError(f"Unknown dataset_type: {dataset_type}")
@@ -326,6 +356,20 @@ def prepare_dataset(config: dict) -> torch.utils.data.Dataset:
             display_project_path(dataset_config_base_dir, REPO_ROOT),
         )
     return dataset
+
+
+def build_coarse_action_dataset_config(config: dict) -> dict | None:
+    if not bool(config.get("coarse_planner_enabled", False)):
+        return None
+    return {
+        "enabled": True,
+        "num_plan_steps": int(config.get("coarse_planner_num_plan_steps", 16)),
+        "planning_horizon": int(config.get("coarse_planner_planning_horizon", 128)),
+        "action_dim": int(config.get("coarse_planner_action_dim", config.get("per_action_dim", 7))),
+        "action_convention": str(config.get("coarse_planner_action_convention", "relative")),
+        "motion_indices": list(config.get("coarse_planner_motion_indices", [])),
+        "gripper_indices": list(config.get("coarse_planner_gripper_indices", [-1])),
+    }
 
 
 def prepare_dataloader(dataset, config: dict) -> DataLoader:
@@ -633,6 +677,8 @@ def train(config):
         }
         if unwrapped_model.bridge_adapter is not None:
             modules_to_inspect["bridge_adapter"] = unwrapped_model.bridge_adapter
+        if unwrapped_model.coarse_planner is not None:
+            modules_to_inspect["coarse_planner"] = unwrapped_model.coarse_planner
         if unwrapped_model.memory_writer is not None:
             modules_to_inspect["memory_writer"] = unwrapped_model.memory_writer
         inspect_named_submodules(modules_to_inspect)
@@ -711,6 +757,10 @@ def train(config):
                 loss = loss + bridge_aux_loss
                 extra_metrics.update(bridge_metrics)
                 extra_metrics["bridge_aux_loss"] = float(bridge_aux_loss.detach().cpu().item())
+            coarse_planner_loss, coarse_planner_metrics = compute_coarse_planner_loss(model, batch, config)
+            if coarse_planner_loss is not None:
+                loss = loss + coarse_planner_loss
+                extra_metrics.update(coarse_planner_metrics)
             
             # === NaN/Inf check ===
             if not check_numerical_stability(
@@ -869,6 +919,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     # Finetuning
     parser.add_argument("--finetune_vlm", action=argparse.BooleanOptionalAction, default=argparse.SUPPRESS)
     parser.add_argument("--finetune_action_head", action=argparse.BooleanOptionalAction, default=argparse.SUPPRESS)
+    parser.add_argument("--finetune_coarse_planner", action=argparse.BooleanOptionalAction, default=argparse.SUPPRESS)
 
     # Misc
     parser.add_argument("--per_action_dim", type=int, default=argparse.SUPPRESS)

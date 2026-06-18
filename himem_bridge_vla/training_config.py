@@ -38,6 +38,7 @@ TRAINING_DEFAULTS: dict[str, Any] = {
     "resume_pretrain": False,
     "finetune_vlm": False,
     "finetune_action_head": False,
+    "finetune_coarse_planner": True,
     "per_action_dim": 7,
     "state_dim": 7,
     "horizon": 16,

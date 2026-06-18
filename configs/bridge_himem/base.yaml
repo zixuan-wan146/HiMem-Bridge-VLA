@@ -46,6 +46,28 @@ skill:
   enabled: false
   num_tokens: 4
 
+coarse_planner:
+  enabled: false
+  type: query_cross_attention
+  hidden_dim: 896
+  num_layers: 3
+  num_heads: 8
+  num_plan_steps: 16
+  planning_horizon: 128
+  max_age_steps: 16
+  action_dim: 7
+  dropout: 0.0
+  loss: smooth_l1
+  loss_weight: 0.2
+  gripper_loss_weight: 2.0
+  smoothness_weight: 0.01
+  input_memory: false
+  placement: bridge_crosskv
+  refresh_policy: transition_or_expire
+  action_convention: relative
+  motion_indices: []
+  gripper_indices: [-1]
+
 action_head:
   kind: flowmatching
   use_existing_checkpoint_config: true

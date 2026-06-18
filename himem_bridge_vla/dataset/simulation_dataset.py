@@ -18,6 +18,7 @@ import pickle
 
 from himem_bridge_vla.dataset.cache_utils import dataset_cache_namespace
 from himem_bridge_vla.dataset.cache_utils import default_dataset_cache_dir
+from himem_bridge_vla.dataset.coarse_actions import build_coarse_action_target
 from himem_bridge_vla.utils.normalization import minmax_normalize
 
 
@@ -180,27 +181,45 @@ def _first_stats_entry(stats: Dict, keys) -> Dict:
 
 
 def _process_parquet_file_worker(args):
-    parquet_path, arm_name, dataset_name, dataset_config, dataset_path, task_mapping, action_horizon, max_samples_per_file, cache_dir = args
+    (
+        parquet_path,
+        arm_name,
+        dataset_name,
+        dataset_config,
+        dataset_path,
+        task_mapping,
+        action_horizon,
+        max_samples_per_file,
+        cache_dir,
+        coarse_action_config,
+    ) = args
     
     try:
         df = pd.read_parquet(parquet_path)
         adapter = build_dataset_input_adapter(dataset_config, dataset_path)
+        coarse_enabled = bool((coarse_action_config or {}).get("enabled", False))
+        planning_horizon = int((coarse_action_config or {}).get("planning_horizon", action_horizon))
+        max_future_horizon = max(action_horizon, planning_horizon if coarse_enabled else action_horizon)
+        real_row_count = len(df)
+
         cache_namespace = dataset_cache_namespace(
             dataset_config,
             dataset_path,
             action_horizon=action_horizon,
             max_samples_per_file=max_samples_per_file,
+            coarse_action_config=coarse_action_config if coarse_enabled else None,
         )
 
         last_row = df.iloc[-1:]  
-        padding_rows = pd.concat([last_row] * action_horizon, ignore_index=True)
+        padding_rows = pd.concat([last_row] * max_future_horizon, ignore_index=True)
         df = pd.concat([df, padding_rows], ignore_index=True)
 
         if max_samples_per_file is not None:
             df = df.head(max_samples_per_file)
+            real_row_count = min(real_row_count, max_samples_per_file)
 
         episode_files = []
-        for i in range(len(df) - action_horizon + 1): 
+        for i in range(len(df) - max_future_horizon + 1):
             start_idx = i
             end_idx = i + action_horizon
             
@@ -255,6 +274,20 @@ def _process_parquet_file_worker(args):
                 "timestamp": adapter.timestamp(first_row, start_idx),
                 **metadata,
             }
+            if coarse_enabled:
+                future_df = df.iloc[i: i + planning_horizon]
+                future_actions = [adapter.action(row) for _, row in future_df.iterrows()]
+                coarse_actions, coarse_action_mask = build_coarse_action_target(
+                    future_actions,
+                    num_plan_steps=int(coarse_action_config["num_plan_steps"]),
+                    planning_horizon=planning_horizon,
+                    valid_action_count=max(0, real_row_count - start_idx),
+                    action_convention=str(coarse_action_config.get("action_convention", "relative")),
+                    motion_indices=coarse_action_config.get("motion_indices") or None,
+                    gripper_indices=coarse_action_config.get("gripper_indices") or None,
+                )
+                episode["coarse_actions"] = coarse_actions
+                episode["coarse_action_mask"] = coarse_action_mask
             
             cache_subdir.mkdir(parents=True, exist_ok=True)
             with open(cache_filepath, 'wb') as f:
@@ -279,7 +312,8 @@ class SimulationDataset(Dataset):
         video_backend_kwargs: Dict[str, Any] = None,
         binarize_gripper: bool = False,
         cache_dir: Union[str, Path] = None,  
-        use_augmentation: bool = False
+        use_augmentation: bool = False,
+        coarse_action_config: Dict[str, Any] | None = None,
     ):
         self.config = config
 
@@ -294,6 +328,9 @@ class SimulationDataset(Dataset):
         self.max_samples_per_file = max_samples_per_file
         self.binarize_gripper = binarize_gripper
         self.use_augmentation = use_augmentation
+        self.coarse_action_config = dict(coarse_action_config or {})
+        self.coarse_action_enabled = bool(self.coarse_action_config.get("enabled", False))
+        self.coarse_action_dim = int(self.coarse_action_config.get("action_dim", self.max_action_dim))
 
 
         cache_dir_value = cache_dir if cache_dir is not None else os.getenv("HIMEM_CACHE_DIR")
@@ -405,7 +442,8 @@ class SimulationDataset(Dataset):
                         task_mapping,  
                         self.action_horizon,
                         self.max_samples_per_file,
-                        self.cache_dir  
+                        self.cache_dir,
+                        self.coarse_action_config,
                     ))
 
        
@@ -637,6 +675,11 @@ class SimulationDataset(Dataset):
             "action_mask": action_mask,
             "embodiment_id": torch.tensor(embodiment_id, dtype=torch.long)
         }
+        if "coarse_actions" in item and "coarse_action_mask" in item:
+            coarse_actions = torch.as_tensor(item["coarse_actions"], dtype=torch.float32)
+            coarse_actions_padded, _ = self._pad_tensor(coarse_actions, self.coarse_action_dim)
+            sample["coarse_actions"] = coarse_actions_padded.to(dtype=torch.bfloat16)
+            sample["coarse_action_mask"] = torch.as_tensor(item["coarse_action_mask"], dtype=torch.bool)
         if "boundary" in item:
             sample["boundary"] = torch.tensor(float(item["boundary"]), dtype=torch.float32)
         if "progress" in item:

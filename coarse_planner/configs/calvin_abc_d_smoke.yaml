@@ -1,0 +1,55 @@
+seed: 42
+
+data:
+  format: planner_feature_cache
+  root: /root/autodl-tmp/datasets/coarse_planner/calvin_abc_d_smoke
+  manifest: manifest.json
+  max_samples: 128
+  max_samples_per_shard: 32
+  val_fraction: 0.1
+  split_by: episode
+
+feature:
+  source: fused
+  hidden_state_layer: deep
+  model_name: /root/autodl-tmp/hf-home/hub/models--OpenGVLab--InternVL3-1B/snapshots/4415a3b810e636d11dfa86b0e9ba40bb00535aa8
+  image_size: 448
+  storage_dtype: float16
+
+simulation:
+  dataset_config: coarse_planner/configs/datasets/calvin_abc_d_smoke.yaml
+  action_horizon: 32
+  max_samples_per_file: null
+  video_backend: av
+  cache_dir: /root/autodl-tmp/cache/himem_bridge_vla/coarse_planner_calvin_abc_d
+
+target:
+  num_plan_steps: 4
+  planning_horizon: 32
+  action_convention: relative
+  motion_indices: [0, 1, 2, 3, 4, 5]
+  gripper_indices: [6]
+
+model:
+  hidden_dim: auto
+  action_dim: auto
+  state_dim: auto
+  num_layers: 3
+  num_heads: 8
+  dropout: 0.0
+
+training:
+  batch_size: 32
+  epochs: 5
+  lr: 0.0003
+  weight_decay: 0.0001
+  num_workers: 2
+  grad_clip_norm: 1.0
+
+loss:
+  gripper_indices: [6]
+  gripper_loss_weight: 2.0
+  smoothness_weight: 0.01
+
+outputs:
+  run_dir: /root/autodl-tmp/runs/coarse_planner/calvin_abc_d_smoke

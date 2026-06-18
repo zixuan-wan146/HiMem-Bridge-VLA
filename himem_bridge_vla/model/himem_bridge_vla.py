@@ -12,12 +12,14 @@ try:
     from .bridge import BridgeAdapter, BridgeAdapterConfig, BridgeAdapterOutput
     from .himem import EpisodeMemoryBank, HierarchicalEpisodeMemory, HiMemTokenWriter
     from .internvl3.internvl3_embedder import InternVL3Embedder, InternVL3EmbeddingOutput
+    from .planner import CoarsePlanSessionCache, CoarsePlanner, CoarsePlannerConfig, CoarsePlannerOutput
 except ImportError:
     from himem_bridge_vla.experiment_config import resolve_experiment_config
     from himem_bridge_vla.model.action_head.flow_matching import FlowmatchingActionHead
     from himem_bridge_vla.model.bridge import BridgeAdapter, BridgeAdapterConfig, BridgeAdapterOutput
     from himem_bridge_vla.model.himem import EpisodeMemoryBank, HierarchicalEpisodeMemory, HiMemTokenWriter
     from himem_bridge_vla.model.internvl3.internvl3_embedder import InternVL3Embedder, InternVL3EmbeddingOutput
+    from himem_bridge_vla.model.planner import CoarsePlanSessionCache, CoarsePlanner, CoarsePlannerConfig, CoarsePlannerOutput
 
 
 class HiMemBridgeVLA(nn.Module):
@@ -82,9 +84,12 @@ class HiMemBridgeVLA(nn.Module):
         self.memory_bank = None
         self.memory_runtime = None
         self.memory_writer = None
+        self.coarse_planner = None
+        self.coarse_plan_cache = None
         self.skill_tokens = None
         self.fused_residual_gate = None
         self.last_bridge_output: BridgeAdapterOutput | None = None
+        self.last_coarse_planner_output: CoarsePlannerOutput | None = None
 
         if self.use_bridge:
             if self.bridge_context_mode not in {
@@ -117,6 +122,26 @@ class HiMemBridgeVLA(nn.Module):
                     raise ValueError(f"skill_num_tokens must be positive, got {skill_count}")
                 self.skill_tokens = nn.Parameter(torch.empty(skill_count, bridge_config.embed_dim))
                 nn.init.normal_(self.skill_tokens, mean=0.0, std=0.02)
+
+        if bool(config.get("coarse_planner_enabled", False)):
+            if not self.use_bridge:
+                raise ValueError("coarse_planner_enabled requires use_bridge=true")
+            if bool(config.get("coarse_planner_input_memory", False)):
+                raise ValueError("Coarse Planner does not accept memory in the first version")
+            planner_config = CoarsePlannerConfig(
+                hidden_dim=config.get("coarse_planner_hidden_dim", config.get("bridge_hidden_dim", config.get("embed_dim", 896))),
+                action_dim=config.get("coarse_planner_action_dim", per_action_dim),
+                state_dim=config.get("state_dim", 7),
+                num_plan_steps=config.get("coarse_planner_num_plan_steps", 16),
+                planning_horizon=config.get("coarse_planner_planning_horizon", 128),
+                num_layers=config.get("coarse_planner_num_layers", 3),
+                num_heads=config.get("coarse_planner_num_heads", 8),
+                dropout=config.get("coarse_planner_dropout", config.get("dropout", 0.0)),
+            )
+            self.coarse_planner = CoarsePlanner(planner_config).to(self._device)
+            self.coarse_plan_cache = CoarsePlanSessionCache(
+                max_age_steps=config.get("coarse_planner_max_age_steps", planner_config.num_plan_steps)
+            )
 
         if self.use_himem:
             if self.memory_placement not in {"crosskv", "mixed_latent"}:
@@ -185,12 +210,16 @@ class HiMemBridgeVLA(nn.Module):
         embodiment_ids: torch.Tensor = None,
         hidden_states: list[torch.Tensor] | None = None,
         memory_context: torch.Tensor | None = None,
+        plan_cache_key: str | None = None,
+        coarse_plan_refresh: bool | None = None,
     ) -> Union[torch.Tensor, Tuple[torch.Tensor, torch.Tensor]]:
         fused_tokens = self._augment_context_with_bridge(
             fused_tokens,
             state=state,
             hidden_states=hidden_states,
             memory_context=memory_context,
+            plan_cache_key=plan_cache_key,
+            coarse_plan_refresh=coarse_plan_refresh,
         )
         if actions_gt is None:
             return self.action_head.get_action(
@@ -221,6 +250,7 @@ class HiMemBridgeVLA(nn.Module):
         session_id: str | None = None,
         reset_memory: bool = False,
         memory_write_gate: torch.Tensor | float | None = None,
+        coarse_plan_refresh: bool | None = None,
     ) -> torch.Tensor:
         embedding_output = self.get_vl_embeddings(
             images=images,
@@ -237,6 +267,9 @@ class HiMemBridgeVLA(nn.Module):
             hidden_states = None
         state_tensor = self.prepare_state(state_input)
         memory_episode_id = self._memory_episode_id(episode_id, session_id)
+        plan_cache_key = self._runtime_episode_key(episode_id, session_id)
+        if reset_memory and self.coarse_plan_cache is not None and plan_cache_key:
+            self.coarse_plan_cache.reset(plan_cache_key)
         memory_context = self._read_memory(memory_episode_id, reset_memory, fused_tokens)
         action = self.predict_action(
             fused_tokens,
@@ -244,6 +277,8 @@ class HiMemBridgeVLA(nn.Module):
             action_mask=action_mask,
             hidden_states=hidden_states,
             memory_context=memory_context,
+            plan_cache_key=plan_cache_key,
+            coarse_plan_refresh=coarse_plan_refresh,
         )
         self._maybe_write_memory(memory_episode_id, gate_override=memory_write_gate)
         return action
@@ -257,6 +292,8 @@ class HiMemBridgeVLA(nn.Module):
         embodiment_ids=None,
         hidden_states=None,
         memory_context=None,
+        plan_cache_key=None,
+        coarse_plan_refresh=None,
     ):
         return self.predict_action(
             fused_tokens,
@@ -266,6 +303,8 @@ class HiMemBridgeVLA(nn.Module):
             embodiment_ids,
             hidden_states=hidden_states,
             memory_context=memory_context,
+            plan_cache_key=plan_cache_key,
+            coarse_plan_refresh=coarse_plan_refresh,
         )
 
     def _augment_context_with_bridge(
@@ -275,15 +314,32 @@ class HiMemBridgeVLA(nn.Module):
         state: torch.Tensor | None,
         hidden_states: list[torch.Tensor] | None,
         memory_context: torch.Tensor | None,
+        plan_cache_key: str | None = None,
+        coarse_plan_refresh: bool | None = None,
     ) -> torch.Tensor:
         if self.bridge_adapter is None:
             self.last_bridge_output = None
+            self.last_coarse_planner_output = None
             return fused_tokens
+
+        plan_tokens = None
+        if self.coarse_planner is not None:
+            if state is None:
+                raise ValueError("state is required when Coarse Planner is enabled")
+            plan_tokens = self._get_or_update_plan_tokens(
+                fused_tokens,
+                state,
+                plan_cache_key=plan_cache_key,
+                coarse_plan_refresh=coarse_plan_refresh,
+            )
+        else:
+            self.last_coarse_planner_output = None
 
         bridge_output = self.bridge_adapter(
             fused_tokens,
             hidden_states=hidden_states,
             state=state,
+            plan_tokens=plan_tokens,
             memory_context=memory_context if self.memory_placement == "crosskv" else None,
         )
         self.last_bridge_output = bridge_output
@@ -325,6 +381,38 @@ class HiMemBridgeVLA(nn.Module):
 
         return context_tokens
 
+    def _get_or_update_plan_tokens(
+        self,
+        fused_tokens: torch.Tensor,
+        state: torch.Tensor,
+        *,
+        plan_cache_key: str | None,
+        coarse_plan_refresh: bool | None,
+    ) -> torch.Tensor:
+        if self.coarse_planner is None:
+            raise RuntimeError("coarse planner is not initialized")
+        refresh_policy = str(self.config.get("coarse_planner_refresh_policy", "transition_or_expire"))
+        use_cache = (
+            refresh_policy == "transition_or_expire"
+            and self.coarse_plan_cache is not None
+            and bool(plan_cache_key)
+            and not self.training
+        )
+        if use_cache and not self.coarse_plan_cache.should_refresh(
+            str(plan_cache_key),
+            refresh_requested=coarse_plan_refresh,
+        ):
+            cached = self.coarse_plan_cache.get(str(plan_cache_key))
+            if cached is not None:
+                self.last_coarse_planner_output = None
+                return cached.to(device=fused_tokens.device, dtype=fused_tokens.dtype)
+
+        self.last_coarse_planner_output = self.coarse_planner(fused_tokens, state)
+        plan_tokens = self.last_coarse_planner_output.plan_tokens
+        if use_cache:
+            self.coarse_plan_cache.put(str(plan_cache_key), plan_tokens.detach())
+        return plan_tokens
+
     def _read_memory(
         self,
         episode_id: str | None,
@@ -357,6 +445,11 @@ class HiMemBridgeVLA(nn.Module):
             return str(episode_id)
         return f"{session_id}:{episode_id}"
 
+    def _runtime_episode_key(self, episode_id: str | None, session_id: str | None = None) -> str | None:
+        if episode_id and session_id:
+            return f"{session_id}:{episode_id}"
+        return str(episode_id or session_id) if episode_id or session_id else None
+
     def _freeze_module(self, module: nn.Module, name: str):
         logging.info(f"Freezing {name} parameters...")
         for param in module.parameters():
@@ -372,6 +465,9 @@ class HiMemBridgeVLA(nn.Module):
             self._freeze_module(self.action_head, "Action Head")
         else:
             logging.info("Finetuning Action Head...")
+
+        if self.coarse_planner is not None and not self.config.get("finetune_coarse_planner", True):
+            self._freeze_module(self.coarse_planner, "Coarse Planner")
 
 
 def _ensure_rank3(tensor: torch.Tensor, name: str) -> torch.Tensor:

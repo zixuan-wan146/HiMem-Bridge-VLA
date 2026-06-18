@@ -1,0 +1,20 @@
+extends: ../base.yaml
+
+experiment_name: coarse_planner_crosskv
+
+bridge:
+  enabled: true
+  variant: crosskv
+
+context:
+  mode: bridge_clean
+
+memory:
+  enabled: true
+  placement: crosskv
+
+coarse_planner:
+  enabled: true
+  num_layers: 3
+  placement: bridge_crosskv
+  input_memory: false

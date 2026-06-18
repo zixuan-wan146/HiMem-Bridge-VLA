@@ -1,0 +1,43 @@
+seed: 42
+
+data:
+  format: planner_feature_cache
+  root: /root/autodl-tmp/datasets/coarse_planner/default
+  manifest: manifest.json
+  input_paths: []
+  stride: 1
+  include_tail: true
+  max_samples_per_shard: 4096
+  val_fraction: 0.1
+  split_by: episode
+
+target:
+  num_plan_steps: 16
+  planning_horizon: 128
+  action_convention: relative
+  motion_indices: null
+  gripper_indices: [-1]
+
+model:
+  hidden_dim: auto
+  action_dim: auto
+  state_dim: auto
+  num_layers: 3
+  num_heads: 8
+  dropout: 0.0
+
+training:
+  batch_size: 64
+  epochs: 20
+  lr: 0.0003
+  weight_decay: 0.0001
+  num_workers: 4
+  grad_clip_norm: 1.0
+
+loss:
+  gripper_indices: [-1]
+  gripper_loss_weight: 2.0
+  smoothness_weight: 0.01
+
+outputs:
+  run_dir: /root/autodl-tmp/runs/coarse_planner/default

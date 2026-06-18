@@ -11,8 +11,9 @@ class BridgeAttentionTests(unittest.TestCase):
         raw_features = torch.randn(2, 6, 10)
         action_queries = torch.randn(2, 5, 8)
         proprio = torch.randn(2, 1, 8)
+        plan_tokens = torch.randn(2, 3, 8)
 
-        output = block(action_tokens, raw_features, action_queries, proprio)
+        output = block(action_tokens, raw_features, action_queries, proprio, plan_tokens=plan_tokens)
 
         self.assertEqual(tuple(output.shape), (2, 4, 8))
         self.assertAlmostEqual(block.raw_gate_value.item(), 0.0, places=6)
@@ -34,12 +35,14 @@ class BridgeAttentionTests(unittest.TestCase):
         fused_tokens = torch.randn(2, 6, 8)
         hidden_states = [torch.randn(2, 6, 8), torch.randn(2, 6, 8)]
         state = torch.randn(2, 3)
+        plan_tokens = torch.randn(2, 3, 8)
         memory_context = torch.randn(2, 2, 8)
 
         output = adapter(
             fused_tokens,
             hidden_states=hidden_states,
             state=state,
+            plan_tokens=plan_tokens,
             memory_context=memory_context,
         )
 

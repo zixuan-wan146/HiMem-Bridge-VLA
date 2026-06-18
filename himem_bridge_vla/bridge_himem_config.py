@@ -11,6 +11,11 @@ MEMORY_PLACEMENTS = {"crosskv", "mixed_latent"}
 SEGMENT_ACCUMULATORS = {"none", "ema"}
 WRITE_POLICIES = {"boundary", "always"}
 ACTION_QUERY_SOURCES = {"learned_bridge"}
+COARSE_PLANNER_TYPES = {"query_cross_attention"}
+COARSE_PLANNER_LOSSES = {"smooth_l1"}
+COARSE_PLANNER_PLACEMENTS = {"bridge_crosskv"}
+COARSE_PLANNER_REFRESH_POLICIES = {"always", "transition_or_expire"}
+COARSE_ACTION_CONVENTIONS = {"relative", "absolute_delta", "absolute_terminal"}
 
 
 @dataclass(frozen=True)
@@ -79,6 +84,30 @@ class SkillConfig:
 
 
 @dataclass(frozen=True)
+class CoarsePlannerConfig:
+    enabled: bool = False
+    type: str = "query_cross_attention"
+    hidden_dim: int = 896
+    num_layers: int = 3
+    num_heads: int = 8
+    num_plan_steps: int = 16
+    planning_horizon: int = 128
+    max_age_steps: int = 16
+    action_dim: int = 7
+    dropout: float = 0.0
+    loss: str = "smooth_l1"
+    loss_weight: float = 0.2
+    gripper_loss_weight: float = 2.0
+    smoothness_weight: float = 0.01
+    input_memory: bool = False
+    placement: str = "bridge_crosskv"
+    refresh_policy: str = "transition_or_expire"
+    action_convention: str = "relative"
+    motion_indices: tuple[int, ...] = ()
+    gripper_indices: tuple[int, ...] = (-1,)
+
+
+@dataclass(frozen=True)
 class ActionHeadConfig:
     kind: str = "flowmatching"
     use_existing_checkpoint_config: bool = True
@@ -96,6 +125,7 @@ class BridgeHiMemConfig:
     context: ContextConfig = field(default_factory=ContextConfig)
     memory: MemoryConfig = field(default_factory=MemoryConfig)
     skill: SkillConfig = field(default_factory=SkillConfig)
+    coarse_planner: CoarsePlannerConfig = field(default_factory=CoarsePlannerConfig)
     action_head: ActionHeadConfig = field(default_factory=ActionHeadConfig)
 
     @classmethod
@@ -112,6 +142,11 @@ class BridgeHiMemConfig:
             context=_build_dataclass(ContextConfig, mapping.get("context", {}), "context"),
             memory=_build_memory_config(mapping.get("memory", {})),
             skill=_build_dataclass(SkillConfig, mapping.get("skill", {}), "skill"),
+            coarse_planner=_build_dataclass(
+                CoarsePlannerConfig,
+                mapping.get("coarse_planner", {}),
+                "coarse_planner",
+            ),
             action_head=_build_dataclass(ActionHeadConfig, mapping.get("action_head", {}), "action_head"),
         )
         config.validate()
@@ -174,6 +209,55 @@ class BridgeHiMemConfig:
             raise ValueError("skill tokens are implemented for mixed_latent experiments only")
         if self.context.mode == "fused_only" and self.memory.enabled:
             raise ValueError("context.mode=fused_only cannot expose memory to the action head")
+
+        if self.coarse_planner.type not in COARSE_PLANNER_TYPES:
+            raise ValueError(f"coarse_planner.type must be one of {sorted(COARSE_PLANNER_TYPES)}")
+        if self.coarse_planner.loss not in COARSE_PLANNER_LOSSES:
+            raise ValueError(f"coarse_planner.loss must be one of {sorted(COARSE_PLANNER_LOSSES)}")
+        if self.coarse_planner.placement not in COARSE_PLANNER_PLACEMENTS:
+            raise ValueError(f"coarse_planner.placement must be one of {sorted(COARSE_PLANNER_PLACEMENTS)}")
+        if self.coarse_planner.refresh_policy not in COARSE_PLANNER_REFRESH_POLICIES:
+            raise ValueError(
+                f"coarse_planner.refresh_policy must be one of {sorted(COARSE_PLANNER_REFRESH_POLICIES)}"
+            )
+        if self.coarse_planner.action_convention not in COARSE_ACTION_CONVENTIONS:
+            raise ValueError(
+                f"coarse_planner.action_convention must be one of {sorted(COARSE_ACTION_CONVENTIONS)}"
+            )
+        _positive_int(self.coarse_planner.hidden_dim, "coarse_planner.hidden_dim")
+        _positive_int(self.coarse_planner.num_layers, "coarse_planner.num_layers")
+        _positive_int(self.coarse_planner.num_heads, "coarse_planner.num_heads")
+        _positive_int(self.coarse_planner.num_plan_steps, "coarse_planner.num_plan_steps")
+        _positive_int(self.coarse_planner.planning_horizon, "coarse_planner.planning_horizon")
+        _positive_int(self.coarse_planner.max_age_steps, "coarse_planner.max_age_steps")
+        _positive_int(self.coarse_planner.action_dim, "coarse_planner.action_dim")
+        _non_negative_float(self.coarse_planner.dropout, "coarse_planner.dropout")
+        _non_negative_float(self.coarse_planner.loss_weight, "coarse_planner.loss_weight")
+        _non_negative_float(self.coarse_planner.gripper_loss_weight, "coarse_planner.gripper_loss_weight")
+        _non_negative_float(self.coarse_planner.smoothness_weight, "coarse_planner.smoothness_weight")
+        _validate_action_indices(
+            self.coarse_planner.motion_indices,
+            self.coarse_planner.action_dim,
+            "coarse_planner.motion_indices",
+        )
+        _validate_action_indices(
+            self.coarse_planner.gripper_indices,
+            self.coarse_planner.action_dim,
+            "coarse_planner.gripper_indices",
+        )
+        if self.coarse_planner.enabled:
+            if not self.bridge.enabled:
+                raise ValueError("coarse_planner.enabled=true requires bridge.enabled=true")
+            if self.coarse_planner.hidden_dim != self.vlm.hidden_dim:
+                raise ValueError("coarse_planner.hidden_dim must match vlm.hidden_dim")
+            if self.coarse_planner.hidden_dim % self.coarse_planner.num_heads != 0:
+                raise ValueError("coarse_planner.hidden_dim must be divisible by coarse_planner.num_heads")
+            if self.coarse_planner.num_layers < 3:
+                raise ValueError("coarse_planner.num_layers must be at least 3")
+            if self.coarse_planner.input_memory:
+                raise ValueError("coarse_planner.input_memory must remain false in the first version")
+            if self.coarse_planner.planning_horizon % self.coarse_planner.num_plan_steps != 0:
+                raise ValueError("coarse_planner.planning_horizon must be divisible by num_plan_steps")
         if self.action_head.kind != "flowmatching":
             raise ValueError("action_head.kind must be 'flowmatching'")
         if self.action_head.horizon is not None:
@@ -211,6 +295,26 @@ class BridgeHiMemConfig:
             "memory_write_policy": self.memory.segment.write_policy,
             "skill_tokens_enabled": self.skill.enabled,
             "skill_num_tokens": self.skill.num_tokens,
+            "coarse_planner_enabled": self.coarse_planner.enabled,
+            "coarse_planner_type": self.coarse_planner.type,
+            "coarse_planner_hidden_dim": self.coarse_planner.hidden_dim,
+            "coarse_planner_num_layers": self.coarse_planner.num_layers,
+            "coarse_planner_num_heads": self.coarse_planner.num_heads,
+            "coarse_planner_num_plan_steps": self.coarse_planner.num_plan_steps,
+            "coarse_planner_planning_horizon": self.coarse_planner.planning_horizon,
+            "coarse_planner_max_age_steps": self.coarse_planner.max_age_steps,
+            "coarse_planner_action_dim": self.coarse_planner.action_dim,
+            "coarse_planner_dropout": self.coarse_planner.dropout,
+            "coarse_planner_loss": self.coarse_planner.loss,
+            "coarse_planner_loss_weight": self.coarse_planner.loss_weight,
+            "coarse_planner_gripper_loss_weight": self.coarse_planner.gripper_loss_weight,
+            "coarse_planner_smoothness_weight": self.coarse_planner.smoothness_weight,
+            "coarse_planner_input_memory": self.coarse_planner.input_memory,
+            "coarse_planner_placement": self.coarse_planner.placement,
+            "coarse_planner_refresh_policy": self.coarse_planner.refresh_policy,
+            "coarse_planner_action_convention": self.coarse_planner.action_convention,
+            "coarse_planner_motion_indices": list(self.coarse_planner.motion_indices),
+            "coarse_planner_gripper_indices": list(self.coarse_planner.gripper_indices),
         }
         if not self.action_head.use_existing_checkpoint_config:
             if self.action_head.horizon is not None:
@@ -362,16 +466,42 @@ def _coerce_field_value(name: str, value: Any, label: str) -> Any:
         "ffn_mult",
         "horizon",
         "per_action_dim",
+        "action_dim",
+        "num_plan_steps",
+        "planning_horizon",
+        "max_age_steps",
     }:
         return _int(value, label)
-    if name in {"dropout", "raw_gate_init", "fused_gate_init", "ema_decay"}:
+    if name in {
+        "dropout",
+        "raw_gate_init",
+        "fused_gate_init",
+        "ema_decay",
+        "loss_weight",
+        "gripper_loss_weight",
+        "smoothness_weight",
+    }:
         return _float(value, label)
-    if name in {"enabled", "freeze", "use_existing_checkpoint_config"}:
+    if name in {"enabled", "freeze", "use_existing_checkpoint_config", "input_memory"}:
         return _bool(value, label)
     if name == "raw_layers":
         return _coerce_raw_layers(value, label)
-    if name in {"source", "variant", "mode", "accumulator", "write_policy", "kind"}:
+    if name in {
+        "source",
+        "variant",
+        "mode",
+        "accumulator",
+        "write_policy",
+        "kind",
+        "type",
+        "loss",
+        "placement",
+        "refresh_policy",
+        "action_convention",
+    }:
         return str(value)
+    if name in {"motion_indices", "gripper_indices"}:
+        return _coerce_int_tuple(value, label)
     return value
 
 
@@ -409,6 +539,28 @@ def _coerce_layer_selector(value: Any, label: str) -> int | str:
             return int(normalized)
         return normalized
     raise ValueError(f"{label} values must be integers or named selectors, got {value!r}")
+
+
+def _coerce_int_tuple(value: Any, label: str) -> tuple[int, ...]:
+    if value is None:
+        return ()
+    if isinstance(value, int):
+        values = (value,)
+    else:
+        try:
+            values = tuple(value)
+        except TypeError as exc:
+            raise ValueError(f"{label} must be a sequence of integers") from exc
+    return tuple(_int(item, label) for item in values)
+
+
+def _validate_action_indices(indices: tuple[int, ...], action_dim: int, label: str) -> None:
+    for index in indices:
+        value = int(index)
+        if value < 0:
+            value += action_dim
+        if value < 0 or value >= action_dim:
+            raise ValueError(f"{label} index {index} is out of range for action_dim {action_dim}")
 
 
 def _deep_merge(base: Mapping[str, Any], override: Mapping[str, Any]) -> dict[str, Any]:

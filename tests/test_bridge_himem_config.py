@@ -37,6 +37,8 @@ class BridgeHiMemConfigTests(unittest.TestCase):
             loaded_names.append(config_module.load_bridge_himem_config(config_path).experiment_name)
 
         self.assertIn("baseline_fused_only", loaded_names)
+        self.assertIn("coarse_planner_crosskv", loaded_names)
+        self.assertIn("coarse_planner_plan_only", loaded_names)
         self.assertIn("crosskv_clean", loaded_names)
         self.assertIn("mixed_latent_clean", loaded_names)
         self.assertIn("mixed_latent_skill", loaded_names)
@@ -90,6 +92,62 @@ class BridgeHiMemConfigTests(unittest.TestCase):
 
         self.assertEqual(config.vlm.raw_layers, ("shallow", "deep"))
         self.assertEqual(config.to_legacy_model_config()["bridge_num_action_queries"], 3)
+
+    def test_coarse_planner_maps_to_legacy_model_config(self):
+        self._import_or_skip("yaml")
+        config_module = self._import_or_skip("himem_bridge_vla.bridge_himem_config")
+        config_path = (
+            Path(__file__).resolve().parents[1]
+            / "configs"
+            / "bridge_himem"
+            / "experiments"
+            / "coarse_planner_crosskv.yaml"
+        )
+
+        config = config_module.load_bridge_himem_config(config_path)
+        legacy = config.to_legacy_model_config()
+
+        self.assertTrue(config.coarse_planner.enabled)
+        self.assertEqual(config.coarse_planner.num_layers, 3)
+        self.assertEqual(config.coarse_planner.max_age_steps, 16)
+        self.assertFalse(config.coarse_planner.input_memory)
+        self.assertTrue(legacy["coarse_planner_enabled"])
+        self.assertEqual(legacy["coarse_planner_max_age_steps"], 16)
+        self.assertEqual(legacy["coarse_planner_placement"], "bridge_crosskv")
+
+    def test_coarse_planner_rejects_memory_input(self):
+        config_module = self._import_or_skip("himem_bridge_vla.bridge_himem_config")
+
+        with self.assertRaisesRegex(ValueError, "input_memory"):
+            config_module.BridgeHiMemConfig.from_mapping(
+                {
+                    "vlm": {"hidden_dim": 8},
+                    "bridge": {"enabled": True, "num_heads": 2},
+                    "context": {"mode": "bridge_clean"},
+                    "coarse_planner": {
+                        "enabled": True,
+                        "hidden_dim": 8,
+                        "num_heads": 2,
+                        "num_layers": 3,
+                        "planning_horizon": 12,
+                        "num_plan_steps": 3,
+                        "input_memory": True,
+                    },
+                }
+            )
+
+    def test_coarse_planner_rejects_out_of_range_action_indices(self):
+        config_module = self._import_or_skip("himem_bridge_vla.bridge_himem_config")
+
+        with self.assertRaisesRegex(ValueError, "gripper_indices"):
+            config_module.BridgeHiMemConfig.from_mapping(
+                {
+                    "coarse_planner": {
+                        "action_dim": 3,
+                        "gripper_indices": [3],
+                    }
+                }
+            )
 
     def test_memory_requires_bridge(self):
         config_module = self._import_or_skip("himem_bridge_vla.bridge_himem_config")

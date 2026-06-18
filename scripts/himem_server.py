@@ -122,6 +122,9 @@ def infer_from_json_dict(data: dict, model, normalizer, transition_manager: Serv
         max_action_mask_dim=TARGET_STATE_DIM,
     )
     transition_result, memory_write_gate = update_transition_trigger(request, transition_manager)
+    coarse_plan_refresh = bool(request["reset_transition_trigger"])
+    if transition_result is not None:
+        coarse_plan_refresh = coarse_plan_refresh or bool(transition_result.should_plan)
 
     images = [decode_image_from_list(img, device) for img in request["image"]]
     for img in images:
@@ -156,6 +159,7 @@ def infer_from_json_dict(data: dict, model, normalizer, transition_manager: Serv
             session_id=request["session_id"],
             reset_memory=request["reset_memory"],
             memory_write_gate=memory_write_gate,
+            coarse_plan_refresh=coarse_plan_refresh,
         )
         if action.numel() % model_action_dim != 0:
             raise ValueError(f"Model returned {action.numel()} action values, not divisible by per_action_dim={model_action_dim}")

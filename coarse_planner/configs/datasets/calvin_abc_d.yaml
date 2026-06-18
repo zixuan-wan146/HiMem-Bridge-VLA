@@ -1,0 +1,18 @@
+max_action_dim: 7
+max_state_dim: 8
+max_views: 1
+
+data_groups:
+  calvin:
+    task_ABC_D:
+      path: /root/autodl-tmp/datasets/calvin/lerobot/task_ABC_D
+      adapter: lerobot
+      view_map:
+        image_1: image
+      state_keys: [state]
+      action_keys: [actions]
+      task_index_keys: [task_index]
+      frame_keys: [frame_index]
+      episode_keys: [episode_index]
+      state_stat_keys: [observation.state]
+      action_stat_keys: [action]

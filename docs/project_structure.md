@@ -20,11 +20,12 @@ himem_bridge_vla/
   experiment_config.py     训练和模型共用的最终配置解析
   reproducibility.py       seed、deterministic、run snapshot
   training_config.py       训练 CLI 参数和路径校验
-  dataset/                 数据集结构、路径解析、样本读取
+  dataset/                 数据集结构、路径解析、样本读取、coarse action target 构造
   model/                   可训练模型模块，只消费已经解析好的 config
 
 evaluations/libero/         LIBERO client、action 协议、result summary
 transition_trigger/         独立 transition-trigger 训练、评估、runtime、selected config
+coarse_planner/             独立 Coarse Planner warm-up 数据、训练、评估、checkpoint export
 scripts/                   train/server/repo gate、preflight、下载、评估编排、报告工具
 tests/                     轻量单测，不下载模型权重
 docs/                      设计说明和工程约定
@@ -84,7 +85,10 @@ python scripts/train.py \
 - `reproducibility.py`：只负责 seed 和 run snapshot，不碰模型逻辑。
 - `model/bridge`：只实现 BridgeAttention 和 bridge token 生成。
 - `model/himem`：只实现 memory writer、segment accumulator、episode bank。
+- `model/planner`：只实现 Coarse Planner，不读取 memory。
+- `coarse_planner/`：只实现 standalone warm-up、planner feature cache、评估和导出，不复制模型结构。
 - `model/himem_bridge_vla.py`：只负责把 VLM、bridge、memory、action head 连接起来。
+- `dataset/coarse_actions.py`：只实现 future action 到 coarse target 的压缩规则和 mask。
 - `transition_trigger/`：只实现独立 trigger 训练、评估、runtime policy 和 selected config，不直接依赖 LIBERO。
 - `evaluations/libero/`：只实现 LIBERO 环境交互、transition-frame 适配、trace/result 记录，不训练 trigger。
 - `scripts/himem_server.py`：只把模型服务、server protocol 和可选 transition trigger manager 连接起来。

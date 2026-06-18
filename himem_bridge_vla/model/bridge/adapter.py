@@ -89,6 +89,7 @@ class BridgeAdapter(nn.Module):
         *,
         hidden_states: list[torch.Tensor] | tuple[torch.Tensor, ...] | None = None,
         state: torch.Tensor | None = None,
+        plan_tokens: torch.Tensor | None = None,
         memory_context: torch.Tensor | None = None,
     ) -> BridgeAdapterOutput:
         fused_tokens = _ensure_rank3(fused_tokens, "fused_tokens")
@@ -99,6 +100,7 @@ class BridgeAdapter(nn.Module):
         action_tokens = self.action_tokens.to(device=device, dtype=dtype).unsqueeze(0).expand(batch_size, -1, -1)
         action_queries = self.action_queries.to(device=device, dtype=dtype).unsqueeze(0).expand(batch_size, -1, -1)
         proprio_embedding = self._project_state(state, batch_size, device, dtype)
+        plan_tokens = self._prepare_plan_tokens(plan_tokens, device, dtype)
         memory_context = self._project_memory(memory_context, device, dtype)
 
         raw_layers = _normalize_hidden_states(hidden_states, fused_tokens)
@@ -109,6 +111,7 @@ class BridgeAdapter(nn.Module):
                 raw_features=raw_features,
                 action_query_features=action_queries,
                 proprio_embedding=proprio_embedding,
+                plan_tokens=plan_tokens,
                 memory_context=memory_context,
             )
 
@@ -158,6 +161,21 @@ class BridgeAdapter(nn.Module):
                 f"memory_context last dimension {memory_context.shape[-1]} != embed_dim {self.config.embed_dim}"
             )
         return self.memory_proj.to(device=device, dtype=dtype)(memory_context)
+
+    def _prepare_plan_tokens(
+        self,
+        plan_tokens: torch.Tensor | None,
+        device: torch.device,
+        dtype: torch.dtype,
+    ) -> torch.Tensor | None:
+        if plan_tokens is None:
+            return None
+        plan_tokens = _ensure_rank3(plan_tokens, "plan_tokens").to(device=device, dtype=dtype)
+        if plan_tokens.shape[1] == 0:
+            return plan_tokens
+        if plan_tokens.shape[-1] != self.config.embed_dim:
+            raise ValueError(f"plan_tokens last dimension {plan_tokens.shape[-1]} != embed_dim {self.config.embed_dim}")
+        return plan_tokens
 
 
 def _normalize_hidden_states(

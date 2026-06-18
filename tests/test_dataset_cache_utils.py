@@ -46,3 +46,27 @@ def test_dataset_cache_namespace_changes_when_data_view_or_horizon_changes(tmp_p
 
     assert base != different_horizon
     assert base != different_view
+
+
+def test_dataset_cache_namespace_changes_when_coarse_action_config_changes(tmp_path: Path):
+    dataset_path = tmp_path / "dataset"
+    config = {"path": str(dataset_path), "view_map": {"image_1": "rgb"}}
+
+    base = dataset_cache_namespace(config, dataset_path, action_horizon=14, max_samples_per_file=None)
+    explicit_none = dataset_cache_namespace(
+        config,
+        dataset_path,
+        action_horizon=14,
+        max_samples_per_file=None,
+        coarse_action_config=None,
+    )
+    coarse = dataset_cache_namespace(
+        config,
+        dataset_path,
+        action_horizon=14,
+        max_samples_per_file=None,
+        coarse_action_config={"enabled": True, "num_plan_steps": 4, "planning_horizon": 16},
+    )
+
+    assert base == explicit_none
+    assert base != coarse

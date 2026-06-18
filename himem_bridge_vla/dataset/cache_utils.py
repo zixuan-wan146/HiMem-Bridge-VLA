@@ -24,6 +24,7 @@ def dataset_cache_namespace(
     *,
     action_horizon: int,
     max_samples_per_file: int | None,
+    coarse_action_config: Mapping[str, Any] | None = None,
 ) -> str:
     repo_root = Path(__file__).resolve().parents[2]
     payload = {
@@ -33,6 +34,8 @@ def dataset_cache_namespace(
         "action_horizon": int(action_horizon),
         "max_samples_per_file": max_samples_per_file,
     }
+    if coarse_action_config:
+        payload["coarse_action_config"] = _jsonable(coarse_action_config)
     encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode("utf-8")
     digest = hashlib.sha256(encoded).hexdigest()[:16]
     return f"v{CACHE_FORMAT_VERSION}_{digest}"

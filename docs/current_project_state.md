@@ -1,6 +1,6 @@
 # Current Project State
 
-Date: 2026-06-17
+Date: 2026-06-18
 
 ## Repository Locations
 
@@ -41,6 +41,58 @@ LIBERO transition-frame adapter: implemented
 LIBERO JSONL trace logging: implemented
 trace summary utility: implemented
 closed-loop LIBERO smoke/eval: integration verified, not a performance claim
+```
+
+The next workstream started on 2026-06-18 is the first Coarse Planner path:
+
+```text
+CoarsePlanner(H_t_vlm, s_t) -> plan_tokens
+plan_tokens + memory_context -> BridgeAttention condition path
+coarse future action targets -> masked planner supervision
+```
+
+Current Coarse Planner implementation status:
+
+```text
+design doc: added
+3-layer-min Transformer planner module: added
+BridgeAttention plan-token condition path: added
+SimulationDataset coarse action target generation: added
+planner loss in training loop: added
+transition/expire runtime plan cache: added
+lightweight config/tests: added
+torch runtime forward verification: passed on remote Evo1
+standalone planner warm-up module: added
+dedicated planner feature-cache builder: added
+synthetic smoke planner dataset path: added
+SimulationDataset -> VLM token cache builder: added
+CALVIN ABC-D planner smoke config: added
+```
+
+Planner token source decision:
+
+```text
+default token source: InternVL3 fused_tokens with return_cls_only=False
+optional ablation: selected hidden_state layer
+state handling: stored separately, fused inside CoarsePlanner as state_proj(state) token
+```
+
+Current CALVIN data note:
+
+```text
+parquet files are present under /root/autodl-tmp/datasets/calvin/lerobot/task_ABC_D
+full videos/chunk-000/image is currently empty
+smoke subset with 4 parquet/video pairs was created under /root/autodl-tmp/datasets/calvin/lerobot/task_ABC_D_smoke
+real planner feature cache smoke succeeded with 20 fused-token samples
+cache: /root/autodl-tmp/datasets/coarse_planner/calvin_abc_d_smoke
+train smoke: /root/autodl-tmp/runs/coarse_planner/calvin_abc_d_smoke
+```
+
+Primary Coarse Planner documents:
+
+```text
+docs/coarse_planner_design.md
+to-do/6-18.md
 ```
 
 ## Selected Runtime Model
@@ -271,6 +323,41 @@ python transition_trigger/scripts/evaluate_runtime_policy.py \
   --split test \
   --device cuda
 ```
+
+Coarse Planner lightweight verification used locally:
+
+```bash
+python3 -m py_compile \
+  himem_bridge_vla/model/planner/coarse_planner.py \
+  himem_bridge_vla/model/planner/session.py \
+  himem_bridge_vla/dataset/coarse_actions.py \
+  himem_bridge_vla/dataset/cache_utils.py \
+  himem_bridge_vla/dataset/simulation_dataset.py \
+  himem_bridge_vla/model/bridge/bridge_attention.py \
+  himem_bridge_vla/model/bridge/adapter.py \
+  himem_bridge_vla/model/himem_bridge_vla.py \
+  himem_bridge_vla/bridge_himem_config.py \
+  himem_bridge_vla/training_loss.py \
+  scripts/train.py
+  scripts/himem_server.py
+```
+
+```bash
+python3 -m pytest -q \
+  tests/test_coarse_planner.py \
+  tests/test_coarse_planner_bridge_integration.py \
+  tests/test_coarse_plan_session.py \
+  tests/test_coarse_action_targets.py \
+  tests/test_bridge_attention.py \
+  tests/test_bridge_himem_config.py \
+  tests/test_training_loss.py \
+  tests/test_train_script_config.py \
+  tests/test_dataset_cache_utils.py \
+  tests/test_himem_server_transition_trigger.py -rs
+```
+
+The local machine currently lacks `torch`, so tensor forward/loss tests are skipped locally and
+must be rerun in the remote training environment after the server is available again.
 
 ## Next Decisions
 
