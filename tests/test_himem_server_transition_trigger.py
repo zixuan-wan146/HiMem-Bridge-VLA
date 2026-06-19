@@ -7,7 +7,7 @@ import pytest
 
 torch = pytest.importorskip("torch")
 
-from himem_bridge_vla.transition_trigger_manager import TransitionTriggerServerResult
+from himem_bridge_vla.transition_trigger_manager import TransitionTriggerServerResult  # noqa: E402
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -48,6 +48,8 @@ class FakeModel:
         self._parameter = torch.nn.Parameter(torch.zeros(1))
         self.last_memory_write_gate = None
         self.last_coarse_plan_refresh = None
+        self.last_executed_control_steps = None
+        self.last_requested_execute_steps = None
 
     def parameters(self):
         return iter([self._parameter])
@@ -55,6 +57,8 @@ class FakeModel:
     def run_inference(self, **kwargs):
         self.last_memory_write_gate = kwargs.get("memory_write_gate")
         self.last_coarse_plan_refresh = kwargs.get("coarse_plan_refresh")
+        self.last_executed_control_steps = kwargs.get("executed_control_steps")
+        self.last_requested_execute_steps = kwargs.get("requested_execute_steps")
         return torch.tensor([[0.0, 1.0, 2.0, 3.0, 4.0, 5.0, 0.6]], dtype=torch.float32)
 
 
@@ -137,6 +141,8 @@ def test_infer_from_json_dict_returns_transition_debug_and_gate(monkeypatch):
     )
     payload = valid_payload()
     payload["return_debug"] = True
+    payload["executed_control_steps"] = 4
+    payload["requested_execute_steps"] = 16
     payload["transition_dataset_name"] = "robomme_four_tasks"
     payload["transition_frame"] = {
         "action": [0.0] * 7,
@@ -152,6 +158,8 @@ def test_infer_from_json_dict_returns_transition_debug_and_gate(monkeypatch):
     assert response["transition_trigger"]["memory_write"] is True
     assert model.last_memory_write_gate == 1.0
     assert model.last_coarse_plan_refresh is True
+    assert model.last_executed_control_steps == 4
+    assert model.last_requested_execute_steps == 16
 
 
 def test_infer_from_json_dict_keeps_legacy_response_without_debug(monkeypatch):

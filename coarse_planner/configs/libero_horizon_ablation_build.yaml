@@ -25,7 +25,7 @@ libero:
     - libero_object
     - libero_goal
     - libero_10
-  horizons: [32, 48, 64]
+  horizons: [64]
   chunk_size: 8
   samples_per_episode: 4
   require_full_max_horizon: true
@@ -38,24 +38,37 @@ libero:
   robot_key: libero_robot
   state_dim: 24
   gripper_to_binary: true
-  normalize_actions: false
+  normalize_actions: true
   estimated_token_shape: [1024, 896]
 
 target:
   planning_horizon: 64
   num_plan_steps: 8
-  action_convention: relative
-  motion_indices: [0, 1, 2, 3, 4, 5]
   gripper_indices: [6]
+
+segment_autoencoder:
+  checkpoint: null
+  latent_dim: 128
+  hidden_dim: 128
+  num_layers: 2
+  num_heads: 4
+  ffn_dim: 512
+  dropout: 0.05
+  gripper_dim: 1
+  distance_loss_weight: 0.1
+  dct_low_frequency: 4
+  endpoint_distance_weight: 0.5
+  gripper_distance_weight: 0.25
 
 model:
   hidden_dim: auto
-  action_dim: auto
   state_dim: auto
-  num_layers: 3
+  latent_dim: null
+  num_layers: 4
   num_heads: 8
-  dropout: 0.0
+  dropout: 0.05
   ffn_mult: 4
+  latent_head_hidden_dim: 512
 
 training:
   batch_size: 512
@@ -64,11 +77,15 @@ training:
   weight_decay: 0.0001
   num_workers: 0
   grad_clip_norm: 1.0
+  amp: true
 
 loss:
   gripper_indices: [6]
   gripper_loss_weight: 2.0
-  smoothness_weight: 0.01
+  latent_loss_weight: 1.0
+  chunk_loss_weight: 0.25
+  loss_on_active_suffix_only: false
 
 outputs:
   run_dir: /root/autodl-tmp/runs/coarse_planner/libero_horizon_ablation
+  segment_ae_run_dir: /root/autodl-tmp/runs/coarse_planner/libero_horizon_ablation_segment_ae

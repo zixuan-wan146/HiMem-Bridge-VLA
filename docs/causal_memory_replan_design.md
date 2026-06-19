@@ -178,7 +178,7 @@ CALVIN is excluded from the main transition training path for now. Its labels ar
 RoboMME converted four-task subset:
 
 ```text
-root: /root/autodl-tmp/datasets/robomme_transition_trigger/four_tasks
+root: $AUTODL_TMP/datasets/robomme_transition_trigger/four_tasks
 frames: 91633
 episodes: 400
 subgoal transition events: 1701
@@ -197,7 +197,7 @@ current flat feature config with deltas = 7 + 16 + 7 + 16 + 1 = 47 dims
 RMBench nine-task subset:
 
 ```text
-root: /root/autodl-tmp/datasets/rmbench_transition_trigger/nine_tasks
+root: $AUTODL_TMP/datasets/rmbench_transition_trigger/nine_tasks
 source benchmark files: 9 tasks, 50 episodes per task
 boundary source: rmbench/language_annotation/duration
 ```

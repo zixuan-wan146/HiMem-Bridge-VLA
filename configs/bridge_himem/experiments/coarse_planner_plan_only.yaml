@@ -15,6 +15,6 @@ memory:
 
 coarse_planner:
   enabled: true
-  num_layers: 3
+  num_layers: 4
   placement: bridge_crosskv
   input_memory: false

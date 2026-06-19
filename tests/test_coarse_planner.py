@@ -8,8 +8,8 @@ class CoarsePlannerTests(unittest.TestCase):
 
         config = planner.CoarsePlannerConfig(
             hidden_dim=8,
-            action_dim=3,
             state_dim=4,
+            latent_dim=6,
             num_plan_steps=5,
             planning_horizon=20,
             num_layers=3,
@@ -20,7 +20,7 @@ class CoarsePlannerTests(unittest.TestCase):
         output = module(torch.randn(2, 6, 8), torch.randn(2, 4))
 
         self.assertEqual(tuple(output.plan_tokens.shape), (2, 5, 8))
-        self.assertEqual(tuple(output.coarse_actions.shape), (2, 5, 3))
+        self.assertEqual(tuple(output.predicted_latents.shape), (2, 5, 6))
 
     def test_coarse_planner_requires_three_layers(self):
         planner = self._import_or_skip("himem_bridge_vla.model.planner")
@@ -29,8 +29,8 @@ class CoarsePlannerTests(unittest.TestCase):
             planner.CoarsePlanner(
                 planner.CoarsePlannerConfig(
                     hidden_dim=8,
-                    action_dim=3,
                     state_dim=4,
+                    latent_dim=6,
                     num_plan_steps=5,
                     planning_horizon=20,
                     num_layers=2,

@@ -10,8 +10,8 @@ class CoarsePlannerBridgeIntegrationTests(unittest.TestCase):
         planner_module = planner.CoarsePlanner(
             planner.CoarsePlannerConfig(
                 hidden_dim=8,
-                action_dim=3,
                 state_dim=4,
+                latent_dim=6,
                 num_plan_steps=5,
                 planning_horizon=20,
                 num_layers=3,
@@ -42,7 +42,7 @@ class CoarsePlannerBridgeIntegrationTests(unittest.TestCase):
         )
 
         self.assertEqual(tuple(planner_output.plan_tokens.shape), (2, 5, 8))
-        self.assertEqual(tuple(planner_output.coarse_actions.shape), (2, 5, 3))
+        self.assertEqual(tuple(planner_output.predicted_latents.shape), (2, 5, 6))
         self.assertEqual(tuple(bridge_output.bridge_tokens.shape), (2, 6, 8))
 
     def _import_or_skip(self, module_name):

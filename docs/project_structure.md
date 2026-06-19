@@ -35,10 +35,10 @@ to-do/                     当天状态、清理计划、下一步研究决策
 大产物不进 git，统一放在远端数据盘：
 
 ```text
-/root/autodl-tmp/runs/       训练、评估、runtime package、closed-loop run 输出
-/root/autodl-tmp/datasets/   数据集和转换后的 parquet/jsonl
-/root/autodl-tmp/checkpoints/HiMem/DeepSpeed checkpoint
-/root/autodl-tmp/hf-home/    Hugging Face cache
+$AUTODL_TMP/runs/       训练、评估、runtime package、closed-loop run 输出
+$AUTODL_TMP/datasets/   数据集和转换后的 parquet/jsonl
+$AUTODL_TMP/checkpoints/HiMem/DeepSpeed checkpoint
+$AUTODL_TMP/hf-home/    Hugging Face cache
 ```
 
 repo 内的 `runs/` 只作为远端临时评测输出目录使用，应保持 git ignored。
@@ -88,7 +88,7 @@ python scripts/train.py \
 - `model/planner`：只实现 Coarse Planner，不读取 memory。
 - `coarse_planner/`：只实现 standalone warm-up、planner feature cache、评估和导出，不复制模型结构。
 - `model/himem_bridge_vla.py`：只负责把 VLM、bridge、memory、action head 连接起来。
-- `dataset/coarse_actions.py`：只实现 future action 到 coarse target 的压缩规则和 mask。
+- `dataset/action_segments.py`：只实现 future action segment 切分、segment mask、plan suffix mask 和执行步数到 token 消费的换算。
 - `transition_trigger/`：只实现独立 trigger 训练、评估、runtime policy 和 selected config，不直接依赖 LIBERO。
 - `evaluations/libero/`：只实现 LIBERO 环境交互、transition-frame 适配、trace/result 记录，不训练 trigger。
 - `scripts/himem_server.py`：只把模型服务、server protocol 和可选 transition trigger manager 连接起来。

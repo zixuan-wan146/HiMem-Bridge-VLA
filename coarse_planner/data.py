@@ -11,7 +11,7 @@ import numpy as np
 import torch
 from torch.utils.data import Dataset
 
-from himem_bridge_vla.dataset.coarse_actions import build_coarse_action_target
+from himem_bridge_vla.dataset.action_segments import build_action_segment_target
 
 
 @dataclass(frozen=True)
@@ -72,13 +72,17 @@ class PlannerFeatureDataset(Dataset):
         item = {
             "vlm_tokens": shard["vlm_tokens"][row].float(),
             "state": shard["state"][row].float(),
-            "coarse_actions": shard["coarse_actions"][row].float(),
-            "coarse_action_mask": shard["coarse_action_mask"][row].float(),
             "frame_index": int(shard["frame_index"][row]),
             "episode_id": str(shard["episode_id"][row]),
         }
+        item["action_segments"] = shard["action_segments"][row].float()
+        item["action_segment_mask"] = shard["action_segment_mask"][row].float()
         if "source_path" in shard:
             item["source_path"] = str(shard["source_path"][row])
+        if "task_suite" in shard:
+            item["task_suite"] = str(shard["task_suite"][row])
+        if "task_description" in shard:
+            item["task_description"] = str(shard["task_description"][row])
         return item
 
     def _load_shard(self, shard_index: int) -> dict[str, Any]:
@@ -98,8 +102,8 @@ class PlannerFeatureDataset(Dataset):
         return {
             "vlm_tokens": tuple(sample["vlm_tokens"].shape),
             "state": tuple(sample["state"].shape),
-            "coarse_actions": tuple(sample["coarse_actions"].shape),
-            "coarse_action_mask": tuple(sample["coarse_action_mask"].shape),
+            "action_segments": tuple(sample["action_segments"].shape),
+            "action_segment_mask": tuple(sample["action_segment_mask"].shape),
         }
 
 
@@ -188,6 +192,7 @@ def build_planner_feature_cache(config: dict[str, Any], output_root: str | Path 
     manifest = {
         "format": "planner_feature_cache",
         "version": 1,
+        "supervision": "action_segment_latent",
         "target": target_config,
         "num_samples": sample_count,
         "split_counts": split_counts,
@@ -263,21 +268,18 @@ def _iter_episode_samples(
             continue
         future = np.zeros((planning_horizon, actions.shape[1]), dtype=np.float32)
         future[:valid_count] = actions[timestep : timestep + valid_count]
-        coarse_actions, coarse_mask = build_coarse_action_target(
+        action_segments, action_segment_mask = build_action_segment_target(
             future,
             num_plan_steps=int(target_config["num_plan_steps"]),
             planning_horizon=planning_horizon,
             valid_action_count=valid_count,
-            action_convention=str(target_config.get("action_convention", "relative")),
-            motion_indices=target_config.get("motion_indices"),
-            gripper_indices=target_config.get("gripper_indices"),
         )
         samples.append(
             {
                 "vlm_tokens": vlm_tokens[timestep],
                 "state": states[timestep],
-                "coarse_actions": coarse_actions,
-                "coarse_action_mask": coarse_mask.astype(np.float32),
+                "action_segments": action_segments,
+                "action_segment_mask": action_segment_mask.astype(np.float32),
                 "episode_id": str(episode["episode_id"]),
                 "frame_index": int(frame_index[timestep]),
                 "source_path": str(episode.get("source_path", "")),
@@ -294,9 +296,9 @@ def _flush_shard(root: Path, split: str, shard_index: int, samples: list[dict[st
     payload = {
         "vlm_tokens": torch.tensor(np.stack([sample["vlm_tokens"] for sample in samples]), dtype=torch.float32),
         "state": torch.tensor(np.stack([sample["state"] for sample in samples]), dtype=torch.float32),
-        "coarse_actions": torch.tensor(np.stack([sample["coarse_actions"] for sample in samples]), dtype=torch.float32),
-        "coarse_action_mask": torch.tensor(
-            np.stack([sample["coarse_action_mask"] for sample in samples]), dtype=torch.float32
+        "action_segments": torch.tensor(np.stack([sample["action_segments"] for sample in samples]), dtype=torch.float32),
+        "action_segment_mask": torch.tensor(
+            np.stack([sample["action_segment_mask"] for sample in samples]), dtype=torch.float32
         ),
         "episode_id": [sample["episode_id"] for sample in samples],
         "frame_index": torch.tensor([sample["frame_index"] for sample in samples], dtype=torch.long),

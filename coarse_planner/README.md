@@ -7,8 +7,9 @@ The intended pipeline is:
 ```text
 cache InternVL3/VLA tokens per frame
 build planner feature cache
+train action-segment autoencoder
 train CoarsePlanner only
-inspect loss and coarse trajectory quality
+inspect latent loss and decoded segment quality
 export checkpoint
 load checkpoint into HiMemBridgeVLA and finetune Bridge/ActionHead
 ```
@@ -23,8 +24,8 @@ state:      [state_dim]
 and predicts:
 
 ```text
-plan_tokens:    [K, D]
-coarse_actions: [K, action_dim]
+plan_tokens:        [K, D]
+predicted_latents:  [K, latent_dim]
 ```
 
 ## Feature Cache Format
@@ -53,7 +54,7 @@ train/planner_samples_00000.pt
 eval/planner_samples_00001.pt
 ```
 
-Each sample contains `vlm_tokens`, `state`, `coarse_actions`, and `coarse_action_mask`.
+Each sample contains `vlm_tokens`, `state`, `action_segments`, and `action_segment_mask`.
 
 ## Smoke Dataset
 
@@ -96,7 +97,7 @@ feature:
 
 State is stored separately in the cache and fused by `CoarsePlanner` through its state projection token. Do not pre-concatenate raw state into `vlm_tokens`.
 
-## LIBERO Horizon Ablation
+## LIBERO Historical Ablation
 
 The LIBERO planner warm-up path uses the Evo-1 style InternVL3-1B embedder:
 
@@ -114,7 +115,7 @@ state = minmax_normalize(state_raw, Evo1_LIBERO/norm_stats.json)
 state = pad_to_24(state)
 ```
 
-The first horizon ablation keeps the chunk size fixed at 8 control steps:
+The old horizon ablation kept the chunk size fixed at 8 control steps:
 
 ```text
 H=32, K=4
@@ -122,7 +123,7 @@ H=48, K=6
 H=64, K=8
 ```
 
-All three caches reuse the same sampled `(task, demo, timestep)` manifest, so the input distribution is identical and only the target horizon changes.
+All three caches reused the same sampled `(task, demo, timestep)` manifest. That experiment used the rejected compressed coarse-action target and should not be used for new training claims.
 
 Dry-run the cache plan:
 

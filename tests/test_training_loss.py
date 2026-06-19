@@ -47,34 +47,45 @@ class TrainingLossTests(unittest.TestCase):
 
         self.assertEqual(tuple(loss.shape), ())
 
-    def test_coarse_planner_loss_uses_step_mask(self):
+    def test_masked_latent_mse_uses_segment_mask(self):
         torch = self._import_or_skip("torch")
         training_loss = self._import_or_skip("himem_bridge_vla.training_loss")
 
         pred = torch.tensor([[[1.0, 0.0], [100.0, 100.0]]])
-        target = torch.tensor([[[0.0, 0.0], [0.0, 0.0]]])
+        target = torch.zeros_like(pred)
         mask = torch.tensor([[1.0, 0.0]])
 
-        loss = training_loss.coarse_planner_smooth_l1_loss(
+        loss = training_loss.masked_latent_mse_loss(
             pred,
             target,
             mask,
-            gripper_indices=[],
-            smoothness_weight=0.0,
         )
 
         self.assertLess(loss.item(), 1.0)
 
-    def test_coarse_planner_loss_rejects_empty_mask(self):
+    def test_masked_latent_mse_accepts_token_loss_weights(self):
         torch = self._import_or_skip("torch")
         training_loss = self._import_or_skip("himem_bridge_vla.training_loss")
 
-        with self.assertRaisesRegex(ValueError, "coarse_action_mask.sum"):
-            training_loss.coarse_planner_smooth_l1_loss(
-                torch.zeros(1, 2, 3),
-                torch.zeros(1, 2, 3),
-                torch.zeros(1, 2),
-            )
+        pred = torch.tensor([[[1.0], [2.0]]])
+        target = torch.zeros_like(pred)
+        mask = torch.ones(1, 2)
+
+        loss = training_loss.masked_latent_mse_loss(
+            pred,
+            target,
+            mask,
+            token_loss_weights=[1.0, 3.0],
+        )
+
+        self.assertAlmostEqual(loss.item(), 3.25)
+
+    def test_masked_latent_mse_rejects_empty_mask(self):
+        torch = self._import_or_skip("torch")
+        training_loss = self._import_or_skip("himem_bridge_vla.training_loss")
+
+        with self.assertRaisesRegex(ValueError, "action_segment_mask.sum"):
+            training_loss.masked_latent_mse_loss(torch.zeros(1, 2, 3), torch.zeros(1, 2, 3), torch.zeros(1, 2))
 
     def _import_or_skip(self, module_name):
         try:

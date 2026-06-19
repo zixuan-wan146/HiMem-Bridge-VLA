@@ -5,7 +5,7 @@ from collections import defaultdict
 import json
 from pathlib import Path
 import sys
-from typing import Any, Iterable, Mapping, Sequence
+from typing import Any, Mapping, Sequence
 
 
 DEFAULT_TIMELINE_LIMIT = 200

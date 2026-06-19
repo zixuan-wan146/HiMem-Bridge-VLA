@@ -15,17 +15,24 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from transition_trigger.evaluate import build_evaluation_dataset
-from transition_trigger.metrics import average_precision, match_events
-from transition_trigger.runtime import TransitionTriggerRuntime
+from transition_trigger.evaluate import build_evaluation_dataset  # noqa: E402
+from transition_trigger.metrics import average_precision, match_events  # noqa: E402
+from transition_trigger.runtime import TransitionTriggerRuntime  # noqa: E402
+
+
+DEFAULT_PACKAGE_DIR = (
+    Path.home()
+    / "autodl-tmp"
+    / "runs"
+    / "transition_trigger"
+    / "selected"
+    / "robomme_rmbench_w32_value_delta_transformer_d512"
+)
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Replay a selected TransitionTrigger runtime policy.")
-    parser.add_argument(
-        "--package-dir",
-        default="/root/autodl-tmp/runs/transition_trigger/selected/robomme_rmbench_w32_value_delta_transformer_d512",
-    )
+    parser.add_argument("--package-dir", default=str(DEFAULT_PACKAGE_DIR))
     parser.add_argument("--split", default="test", help="Dataset split to replay, usually eval or test.")
     parser.add_argument("--output", default=None)
     parser.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")

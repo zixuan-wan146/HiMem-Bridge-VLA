@@ -50,22 +50,25 @@ coarse_planner:
   enabled: false
   type: query_cross_attention
   hidden_dim: 896
-  num_layers: 3
+  num_layers: 4
   num_heads: 8
-  num_plan_steps: 16
-  planning_horizon: 128
-  max_age_steps: 16
-  action_dim: 7
-  dropout: 0.0
-  loss: smooth_l1
+  num_plan_steps: 8
+  planning_horizon: 64
+  execution_horizon: 16
+  suffix_stride_tokens: 2
+  latent_dim: 128
+  latent_head_hidden_dim: 512
+  segment_action_dim: 7
+  dropout: 0.05
+  loss: intent_latent
   loss_weight: 0.2
+  latent_loss_weight: 1.0
+  chunk_loss_weight: 0.25
   gripper_loss_weight: 2.0
-  smoothness_weight: 0.01
+  segment_autoencoder_checkpoint:
   input_memory: false
   placement: bridge_crosskv
-  refresh_policy: transition_or_expire
-  action_convention: relative
-  motion_indices: []
+  refresh_policy: transition_or_queue
   gripper_indices: [-1]
 
 action_head:

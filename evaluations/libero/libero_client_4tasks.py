@@ -74,6 +74,8 @@ def obs_to_json_dict(
     transition_dataset_name: str | None = None,
     previous_action=None,
     transition_frame_index: int | None = None,
+    executed_control_steps: int | None = None,
+    requested_execute_steps: int | None = None,
 ):
     img = np.ascontiguousarray(obs["agentview_image"][::-1, ::-1])
     wrist_img = np.ascontiguousarray(obs["robot0_eye_in_hand_image"][::-1, ::-1])
@@ -98,6 +100,10 @@ def obs_to_json_dict(
         data["episode_id"] = episode_id
     if session_id is not None:
         data["session_id"] = session_id
+    if executed_control_steps is not None:
+        data["executed_control_steps"] = int(executed_control_steps)
+    if requested_execute_steps is not None:
+        data["requested_execute_steps"] = int(requested_execute_steps)
     if transition_dataset_name is not None:
         data["transition_dataset_name"] = transition_dataset_name
         data["reset_transition_trigger"] = bool(reset_transition_trigger)
@@ -200,6 +206,7 @@ async def run(SERVER_URL: str, max_steps: int = None, num_episodes: int = None, 
                     frames = []
                     previous_transition_action = None
                     episode_key = f"{task_suite_name}:task{task_id}:episode{ep}"
+                    last_executed_control_steps = None
 
                     for step in range(max_steps):
                         decision_steps += 1
@@ -215,6 +222,8 @@ async def run(SERVER_URL: str, max_steps: int = None, num_episodes: int = None, 
                             transition_dataset_name=args.transition_dataset_name,
                             previous_action=previous_transition_action,
                             transition_frame_index=transition_frame_index,
+                            executed_control_steps=last_executed_control_steps,
+                            requested_execute_steps=horizon,
                         )
                         await ws.send(json.dumps(send_data))
                         log.debug(f"[Step {step}] Send observation")
@@ -276,6 +285,7 @@ async def run(SERVER_URL: str, max_steps: int = None, num_episodes: int = None, 
                             log.error(f"Action parsing failed: {e}, content: {result}")
                             break
 
+                        executed_this_chunk = 0
                         for action_values in actions:
                             action = to_libero_action(action_values)
                             log.debug(action[:7])
@@ -283,6 +293,7 @@ async def run(SERVER_URL: str, max_steps: int = None, num_episodes: int = None, 
                             try:
                                 obs, reward, done, info = env.step(action)
                                 control_steps += 1
+                                executed_this_chunk += 1
                                 if args.transition_dataset_name:
                                     previous_transition_action = action
                             except ValueError as ve:
@@ -305,6 +316,7 @@ async def run(SERVER_URL: str, max_steps: int = None, num_episodes: int = None, 
                                 total_success += 1
                                 total_success_decision_steps += decision_steps
                                 break
+                        last_executed_control_steps = executed_this_chunk
                         if episode_done or episode_failed:
                             break
 

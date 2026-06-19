@@ -108,11 +108,20 @@ class BridgeHiMemConfigTests(unittest.TestCase):
         legacy = config.to_legacy_model_config()
 
         self.assertTrue(config.coarse_planner.enabled)
-        self.assertEqual(config.coarse_planner.num_layers, 3)
-        self.assertEqual(config.coarse_planner.max_age_steps, 16)
+        self.assertEqual(config.coarse_planner.num_layers, 4)
+        self.assertEqual(config.coarse_planner.latent_dim, 128)
+        self.assertEqual(config.coarse_planner.latent_head_hidden_dim, 512)
+        self.assertEqual(config.coarse_planner.planning_horizon, 64)
+        self.assertEqual(config.coarse_planner.num_plan_steps, 8)
+        self.assertEqual(config.coarse_planner.execution_horizon, 16)
+        self.assertEqual(config.coarse_planner.suffix_stride_tokens, 2)
         self.assertFalse(config.coarse_planner.input_memory)
         self.assertTrue(legacy["coarse_planner_enabled"])
-        self.assertEqual(legacy["coarse_planner_max_age_steps"], 16)
+        self.assertEqual(legacy["coarse_planner_latent_dim"], 128)
+        self.assertEqual(legacy["coarse_planner_latent_head_hidden_dim"], 512)
+        self.assertEqual(legacy["coarse_planner_execution_horizon"], 16)
+        self.assertEqual(legacy["coarse_planner_suffix_stride_tokens"], 2)
+        self.assertEqual(legacy["coarse_planner_refresh_policy"], "transition_or_queue")
         self.assertEqual(legacy["coarse_planner_placement"], "bridge_crosskv")
 
     def test_coarse_planner_rejects_memory_input(self):
@@ -143,7 +152,7 @@ class BridgeHiMemConfigTests(unittest.TestCase):
             config_module.BridgeHiMemConfig.from_mapping(
                 {
                     "coarse_planner": {
-                        "action_dim": 3,
+                        "segment_action_dim": 3,
                         "gripper_indices": [3],
                     }
                 }

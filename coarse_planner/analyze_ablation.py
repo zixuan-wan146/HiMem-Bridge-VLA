@@ -50,7 +50,7 @@ def summarize_run(run_dir: Path) -> dict[str, Any]:
         "planning_horizon": int(planner_config.get("planning_horizon", 0)),
         "num_plan_steps": int(planner_config.get("num_plan_steps", 0)),
         "best_val_loss": float(val_metrics.get("loss", best_epoch.get("val_loss", 0.0))),
-        "best_val_mae": float(val_metrics.get("mae", best_epoch.get("val_mae", 0.0))),
+        "best_val_latent_mse": float(val_metrics.get("latent_mse", best_epoch.get("val_latent_mse", 0.0))),
         "best_epoch": int(best_epoch.get("epoch", 0)),
         "last_train_loss": float(last_epoch.get("train_loss", 0.0)),
         "peak_reserved_gb": float(max((item.get("cuda_peak_reserved_gb", 0.0) for item in history), default=0.0)),
@@ -63,13 +63,13 @@ def format_report(rows: list[dict[str, Any]]) -> str:
     lines = [
         "# LIBERO Coarse Planner Horizon Ablation",
         "",
-        "| horizon | K | best epoch | val loss | val MAE | train loss last | peak reserved GB | run |",
+        "| horizon | K | best epoch | val loss | val latent MSE | train loss last | peak reserved GB | run |",
         "|---:|---:|---:|---:|---:|---:|---:|---|",
     ]
     for row in rows:
         lines.append(
             "| {planning_horizon} | {num_plan_steps} | {best_epoch} | "
-            "{best_val_loss:.6f} | {best_val_mae:.6f} | {last_train_loss:.6f} | "
+            "{best_val_loss:.6f} | {best_val_latent_mse:.6f} | {last_train_loss:.6f} | "
             "{peak_reserved_gb:.3f} | `{run_dir}` |".format(**row)
         )
     best = min(rows, key=lambda item: float(item["best_val_loss"]))

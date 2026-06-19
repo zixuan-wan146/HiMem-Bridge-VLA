@@ -22,7 +22,7 @@ def parse_args() -> argparse.Namespace:
         action="append",
         default=[],
         metavar="TASK=H5",
-        help="Task/H5 pair. Can be passed multiple times, e.g. --dataset StopCube=/path/file.h5.",
+        help="Task/H5 pair. Can be passed multiple times, e.g. --dataset StopCube=relative/path/file.h5.",
     )
     parser.add_argument("--output-root", required=True, help="Output dataset root.")
     parser.add_argument("--max-episodes", type=int, default=None)

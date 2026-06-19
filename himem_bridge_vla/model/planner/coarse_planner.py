@@ -9,24 +9,25 @@ import torch.nn as nn
 @dataclass(frozen=True)
 class CoarsePlannerConfig:
     hidden_dim: int
-    action_dim: int
     state_dim: int
-    num_plan_steps: int = 16
-    planning_horizon: int = 128
-    num_layers: int = 3
+    latent_dim: int = 128
+    num_plan_steps: int = 8
+    planning_horizon: int = 64
+    num_layers: int = 4
     num_heads: int = 8
-    dropout: float = 0.0
+    dropout: float = 0.05
     ffn_mult: int = 4
+    latent_head_hidden_dim: int = 512
 
 
 @dataclass(frozen=True)
 class CoarsePlannerOutput:
     plan_tokens: torch.Tensor
-    coarse_actions: torch.Tensor
+    predicted_latents: torch.Tensor
 
 
 class CoarsePlanner(nn.Module):
-    """Query Transformer planner supervised by coarse future actions.
+    """Query Transformer planner supervised by action-segment intent latents.
 
     The first version intentionally does not accept memory tokens. It predicts
     plan tokens only from current VLM tokens and robot state, so memory remains
@@ -37,10 +38,10 @@ class CoarsePlanner(nn.Module):
         super().__init__()
         if config.hidden_dim <= 0:
             raise ValueError(f"hidden_dim must be positive, got {config.hidden_dim}")
-        if config.action_dim <= 0:
-            raise ValueError(f"action_dim must be positive, got {config.action_dim}")
         if config.state_dim <= 0:
             raise ValueError(f"state_dim must be positive, got {config.state_dim}")
+        if config.latent_dim <= 0:
+            raise ValueError(f"latent_dim must be positive, got {config.latent_dim}")
         if config.num_plan_steps <= 0:
             raise ValueError(f"num_plan_steps must be positive, got {config.num_plan_steps}")
         if config.planning_horizon <= 0:
@@ -55,6 +56,8 @@ class CoarsePlanner(nn.Module):
             raise ValueError("hidden_dim must be divisible by num_heads")
         if config.ffn_mult <= 0:
             raise ValueError(f"ffn_mult must be positive, got {config.ffn_mult}")
+        if config.latent_head_hidden_dim <= 0:
+            raise ValueError(f"latent_head_hidden_dim must be positive, got {config.latent_head_hidden_dim}")
         if float(config.dropout) < 0.0:
             raise ValueError(f"dropout must be non-negative, got {config.dropout}")
 
@@ -83,7 +86,13 @@ class CoarsePlanner(nn.Module):
             ]
         )
         self.output_norm = nn.LayerNorm(config.hidden_dim)
-        self.action_head = nn.Linear(config.hidden_dim, config.action_dim)
+        self.latent_head = nn.Sequential(
+            nn.LayerNorm(config.hidden_dim),
+            nn.Linear(config.hidden_dim, config.latent_head_hidden_dim),
+            nn.GELU(),
+            nn.Dropout(config.dropout),
+            nn.Linear(config.latent_head_hidden_dim, config.latent_dim),
+        )
 
     def forward(
         self,
@@ -111,14 +120,14 @@ class CoarsePlanner(nn.Module):
             plan_tokens = layer(tgt=plan_tokens, memory=context)
 
         plan_tokens = self.output_norm(plan_tokens)
-        coarse_actions = self.action_head(plan_tokens)
-        return CoarsePlannerOutput(plan_tokens=plan_tokens, coarse_actions=coarse_actions)
+        predicted_latents = self.latent_head(plan_tokens)
+        return CoarsePlannerOutput(plan_tokens=plan_tokens, predicted_latents=predicted_latents)
 
     def _match_runtime_dtype(self, *, device: torch.device, dtype: torch.dtype) -> None:
         self.state_proj.to(device=device, dtype=dtype)
         self.layers.to(device=device, dtype=dtype)
         self.output_norm.to(device=device, dtype=dtype)
-        self.action_head.to(device=device, dtype=dtype)
+        self.latent_head.to(device=device, dtype=dtype)
 
 
 def _ensure_rank3(tensor: torch.Tensor, name: str) -> torch.Tensor:

@@ -105,7 +105,7 @@ def test_compute_bridge_auxiliary_loss_uses_boundary_and_progress_labels():
     assert "bridge_aux_loss" not in metrics
 
 
-def test_custom_collate_includes_coarse_planner_targets():
+def test_custom_collate_includes_action_segment_targets():
     torch = pytest.importorskip("torch")
     train_script = _load_train_script()
     train_script.torch = torch
@@ -118,24 +118,34 @@ def test_custom_collate_includes_coarse_planner_targets():
         "action_mask": torch.ones(2, 2, dtype=torch.bool),
         "image_mask": torch.ones(1, dtype=torch.bool),
         "embodiment_id": torch.tensor(0),
-        "coarse_actions": torch.zeros(3, 2),
-        "coarse_action_mask": torch.tensor([True, True, False]),
+        "planner_prompt": "pick",
+        "planner_images": torch.zeros(1, 3, 4, 4),
+        "planner_image_mask": torch.ones(1, dtype=torch.bool),
+        "planner_state": torch.zeros(2),
+        "action_segments": torch.zeros(3, 4, 2),
+        "action_segment_mask": torch.tensor([True, True, False]),
+        "plan_active_mask": torch.tensor([False, True, True]),
+        "plan_consumed_steps": torch.tensor(4),
+        "plan_consumed_tokens": torch.tensor(1),
+        "plan_residual_steps": torch.tensor(0),
     }
 
     batch = train_script.custom_collate_fn([item, item])
 
-    assert tuple(batch["coarse_actions"].shape) == (2, 3, 2)
-    assert tuple(batch["coarse_action_mask"].shape) == (2, 3)
+    assert tuple(batch["action_segments"].shape) == (2, 3, 4, 2)
+    assert tuple(batch["action_segment_mask"].shape) == (2, 3)
+    assert tuple(batch["planner_states"].shape) == (2, 2)
+    assert tuple(batch["plan_active_mask"].shape) == (2, 3)
 
 
 def test_compute_coarse_planner_loss_uses_cached_model_output():
     torch = pytest.importorskip("torch")
     train_script = _load_train_script()
 
-    model = _ModelWithPlannerOutput(coarse_actions=torch.zeros(2, 3, 2))
+    model = _ModelWithPlannerOutput(predicted_latents=torch.zeros(2, 3, 5))
     batch = {
-        "coarse_actions": torch.ones(2, 3, 2),
-        "coarse_action_mask": torch.ones(2, 3, dtype=torch.bool),
+        "action_segments": torch.ones(2, 3, 4, 2),
+        "action_segment_mask": torch.ones(2, 3, dtype=torch.bool),
     }
 
     loss, metrics = train_script.compute_coarse_planner_loss(
@@ -144,8 +154,8 @@ def test_compute_coarse_planner_loss_uses_cached_model_output():
         {
             "coarse_planner_loss_weight": 0.5,
             "coarse_planner_gripper_indices": [],
-            "coarse_planner_smoothness_weight": 0.0,
         },
+        segment_autoencoder=_FakeSegmentAutoencoder(latent_dim=5),
     )
 
     assert loss is not None
@@ -154,24 +164,23 @@ def test_compute_coarse_planner_loss_uses_cached_model_output():
     assert "coarse_planner_loss_weighted" in metrics
 
 
-def test_build_coarse_action_dataset_config_returns_none_when_disabled():
+def test_build_action_segment_dataset_config_returns_none_when_disabled():
     train_script = _load_train_script()
 
-    assert train_script.build_coarse_action_dataset_config({"coarse_planner_enabled": False}) is None
+    assert train_script.build_action_segment_dataset_config({"coarse_planner_enabled": False}) is None
 
 
-def test_build_coarse_action_dataset_config_maps_planner_fields():
+def test_build_action_segment_dataset_config_maps_planner_fields():
     train_script = _load_train_script()
 
-    config = train_script.build_coarse_action_dataset_config(
+    config = train_script.build_action_segment_dataset_config(
         {
             "coarse_planner_enabled": True,
             "coarse_planner_num_plan_steps": 4,
             "coarse_planner_planning_horizon": 16,
             "coarse_planner_action_dim": 7,
-            "coarse_planner_action_convention": "relative",
-            "coarse_planner_motion_indices": [0, 1],
-            "coarse_planner_gripper_indices": [6],
+            "coarse_planner_execution_horizon": 8,
+            "coarse_planner_suffix_stride_tokens": 2,
         }
     )
 
@@ -180,9 +189,8 @@ def test_build_coarse_action_dataset_config_maps_planner_fields():
         "num_plan_steps": 4,
         "planning_horizon": 16,
         "action_dim": 7,
-        "action_convention": "relative",
-        "motion_indices": [0, 1],
-        "gripper_indices": [6],
+        "execution_horizon": 8,
+        "suffix_stride_tokens": 2,
     }
 
 
@@ -213,13 +221,24 @@ class _ModelWithBridgeOutput:
 
 
 class _PlannerOutput:
-    def __init__(self, *, coarse_actions):
-        self.coarse_actions = coarse_actions
+    def __init__(self, *, predicted_latents):
+        self.predicted_latents = predicted_latents
 
 
 class _ModelWithPlannerOutput:
-    def __init__(self, *, coarse_actions):
-        self.last_coarse_planner_output = _PlannerOutput(coarse_actions=coarse_actions)
+    def __init__(self, *, predicted_latents):
+        self.last_coarse_planner_output = _PlannerOutput(predicted_latents=predicted_latents)
+
+
+class _FakeSegmentAutoencoder:
+    def __init__(self, *, latent_dim):
+        self.latent_dim = latent_dim
+
+    def encode(self, action_segments):
+        return action_segments.new_ones((*action_segments.shape[:2], self.latent_dim))
+
+    def decode(self, predicted_latents):
+        return predicted_latents.new_zeros((*predicted_latents.shape[:2], 4, 2))
 
 
 def _load_train_script():

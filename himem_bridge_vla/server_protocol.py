@@ -65,6 +65,12 @@ def validate_inference_request(
     transition_frame_index = data.get("transition_frame_index")
     if transition_frame_index is not None:
         transition_frame_index = int(transition_frame_index)
+    executed_control_steps = data.get("executed_control_steps")
+    if executed_control_steps is not None:
+        executed_control_steps = _non_negative_int(executed_control_steps, "executed_control_steps")
+    requested_execute_steps = data.get("requested_execute_steps")
+    if requested_execute_steps is not None:
+        requested_execute_steps = _positive_int(requested_execute_steps, "requested_execute_steps")
 
     return {
         "image": images,
@@ -80,6 +86,8 @@ def validate_inference_request(
         "transition_dataset_name": transition_dataset_name,
         "transition_frame": _validate_transition_frame(data.get("transition_frame")),
         "transition_frame_index": transition_frame_index,
+        "executed_control_steps": executed_control_steps,
+        "requested_execute_steps": requested_execute_steps,
         "return_debug": bool(data.get("return_debug", False)),
     }
 
@@ -139,6 +147,25 @@ def _positive_int_or_default(value: Any, default: int) -> int:
     except (TypeError, ValueError):
         return default
     return parsed if parsed > 0 else default
+
+
+def _positive_int(value: Any, field_name: str) -> int:
+    parsed = _non_negative_int(value, field_name)
+    if parsed <= 0:
+        raise ValueError(f"{field_name} must be positive, got {value!r}")
+    return parsed
+
+
+def _non_negative_int(value: Any, field_name: str) -> int:
+    if isinstance(value, bool):
+        raise ValueError(f"{field_name} must be an integer, got {value!r}")
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"{field_name} must be an integer, got {value!r}") from exc
+    if parsed < 0:
+        raise ValueError(f"{field_name} must be non-negative, got {value!r}")
+    return parsed
 
 
 def _coerce_binary_mask(mask: Any, field_name: str) -> np.ndarray:

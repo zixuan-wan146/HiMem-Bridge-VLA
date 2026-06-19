@@ -18,7 +18,13 @@ import pickle
 
 from himem_bridge_vla.dataset.cache_utils import dataset_cache_namespace
 from himem_bridge_vla.dataset.cache_utils import default_dataset_cache_dir
-from himem_bridge_vla.dataset.coarse_actions import build_coarse_action_target
+from himem_bridge_vla.dataset.action_segments import (
+    build_action_segment_target,
+    build_plan_active_mask,
+    plan_consumption_from_steps,
+    plan_suffix_token_offsets,
+    token_span_steps,
+)
 from himem_bridge_vla.utils.normalization import minmax_normalize
 
 
@@ -191,109 +197,147 @@ def _process_parquet_file_worker(args):
         action_horizon,
         max_samples_per_file,
         cache_dir,
-        coarse_action_config,
+        action_segment_config,
     ) = args
     
     try:
         df = pd.read_parquet(parquet_path)
         adapter = build_dataset_input_adapter(dataset_config, dataset_path)
-        coarse_enabled = bool((coarse_action_config or {}).get("enabled", False))
-        planning_horizon = int((coarse_action_config or {}).get("planning_horizon", action_horizon))
-        max_future_horizon = max(action_horizon, planning_horizon if coarse_enabled else action_horizon)
+        segments_enabled = bool((action_segment_config or {}).get("enabled", False))
+        planning_horizon = int((action_segment_config or {}).get("planning_horizon", action_horizon))
+        num_plan_steps = int((action_segment_config or {}).get("num_plan_steps", 1))
+        execution_horizon = int((action_segment_config or {}).get("execution_horizon", action_horizon))
+        suffix_stride_tokens = (action_segment_config or {}).get("suffix_stride_tokens")
+        if suffix_stride_tokens is not None:
+            suffix_stride_tokens = int(suffix_stride_tokens)
+        if segments_enabled:
+            span_steps = token_span_steps(planning_horizon=planning_horizon, num_plan_steps=num_plan_steps)
+            suffix_offsets = plan_suffix_token_offsets(
+                num_plan_steps=num_plan_steps,
+                planning_horizon=planning_horizon,
+                execution_horizon=execution_horizon,
+                suffix_stride_tokens=suffix_stride_tokens,
+            )
+        else:
+            span_steps = 1
+            suffix_offsets = [0]
+        max_consumed_steps = max(suffix_offsets) * span_steps
+        max_future_horizon = max(
+            action_horizon,
+            planning_horizon if segments_enabled else action_horizon,
+            max_consumed_steps + action_horizon,
+        )
         real_row_count = len(df)
+        if max_samples_per_file is not None:
+            df = df.head(max_samples_per_file)
+            real_row_count = min(real_row_count, max_samples_per_file)
 
         cache_namespace = dataset_cache_namespace(
             dataset_config,
             dataset_path,
             action_horizon=action_horizon,
             max_samples_per_file=max_samples_per_file,
-            coarse_action_config=coarse_action_config if coarse_enabled else None,
+            action_segment_config=action_segment_config if segments_enabled else None,
         )
 
         last_row = df.iloc[-1:]  
         padding_rows = pd.concat([last_row] * max_future_horizon, ignore_index=True)
         df = pd.concat([df, padding_rows], ignore_index=True)
 
-        if max_samples_per_file is not None:
-            df = df.head(max_samples_per_file)
-            real_row_count = min(real_row_count, max_samples_per_file)
+        base_video_path = dataset_path / "videos" / parquet_path.parent.name
+        video_paths = adapter.resolve_video_paths(base_video_path, parquet_path)
+        missing_views = sorted(set(adapter.view_map) - set(video_paths))
+        for view_key in missing_views:
+            logging.warning(
+                "missing video file for %s/%s view %s; tried %s",
+                arm_name,
+                dataset_name,
+                view_key,
+                ", ".join(adapter.view_map[view_key]),
+            )
+        if not video_paths:
+            logging.warning(
+                "skipping %s/%s file %s because no configured video views exist",
+                arm_name,
+                dataset_name,
+                parquet_path,
+            )
+            return [], None
 
         episode_files = []
-        for i in range(len(df) - max_future_horizon + 1):
-            start_idx = i
-            end_idx = i + action_horizon
-            
-      
-            cache_subdir = cache_dir / cache_namespace / arm_name / dataset_name / parquet_path.parent.name / parquet_path.stem
-            cache_filename = f"{start_idx}_{end_idx}.pkl"
-            cache_filepath = cache_subdir / cache_filename
-            
-            
-            if cache_filepath.exists():
+        for anchor_idx in range(real_row_count):
+            for consumed_tokens in suffix_offsets:
+                consumed_steps = int(consumed_tokens) * span_steps
+                current_idx = anchor_idx + consumed_steps
+                if current_idx >= real_row_count:
+                    continue
+                start_idx = current_idx
+                end_idx = current_idx + action_horizon
+
+                cache_subdir = cache_dir / cache_namespace / arm_name / dataset_name / parquet_path.parent.name / parquet_path.stem
+                cache_filename = f"{anchor_idx}_{start_idx}_{end_idx}_u{int(consumed_tokens)}.pkl"
+                cache_filepath = cache_subdir / cache_filename
+
+                if cache_filepath.exists():
+                    episode_files.append(str(cache_filepath))
+                    continue
+
+                logging.info(f"build {cache_filename}")
+                sub_df = df.iloc[start_idx: end_idx]
+                first_row = sub_df.iloc[0]
+                planner_row = df.iloc[anchor_idx]
+                metadata = adapter.sample_metadata(first_row, parquet_path, start_idx)
+                planner_metadata = adapter.sample_metadata(planner_row, parquet_path, anchor_idx)
+
+                prompt = adapter.prompt(first_row, task_mapping, metadata)
+                if not prompt:
+                    task_index = first_row.get("task_index", None)
+                    logging.info(f"cannot find task description from task_index={task_index}")
+                planner_prompt = adapter.prompt(planner_row, task_mapping, planner_metadata) or prompt
+
+                episode = {
+                    "arm_key": arm_name,
+                    "dataset_key": dataset_name,
+                    "prompt": prompt,
+                    "state": adapter.state(first_row),
+                    "action": [adapter.action(row) for _, row in sub_df.iterrows()],
+                    "video_paths": video_paths,
+                    "timestamp": adapter.timestamp(first_row, start_idx),
+                    "planner_prompt": planner_prompt,
+                    "planner_state": adapter.state(planner_row),
+                    "planner_timestamp": adapter.timestamp(planner_row, anchor_idx),
+                    "plan_consumed_steps": consumed_steps,
+                    "plan_consumed_tokens": int(consumed_tokens),
+                    "plan_residual_steps": 0,
+                    **metadata,
+                }
+                if segments_enabled:
+                    consumed_token_count, residual_steps = plan_consumption_from_steps(
+                        consumed_steps,
+                        span_steps=span_steps,
+                    )
+                    future_df = df.iloc[anchor_idx: anchor_idx + planning_horizon]
+                    future_actions = [adapter.action(row) for _, row in future_df.iterrows()]
+                    action_segments, action_segment_mask = build_action_segment_target(
+                        future_actions,
+                        num_plan_steps=num_plan_steps,
+                        planning_horizon=planning_horizon,
+                        valid_action_count=max(0, real_row_count - anchor_idx),
+                    )
+                    episode["action_segments"] = action_segments
+                    episode["action_segment_mask"] = action_segment_mask
+                    episode["plan_consumed_tokens"] = int(consumed_token_count)
+                    episode["plan_residual_steps"] = int(residual_steps)
+                    episode["plan_active_mask"] = build_plan_active_mask(
+                        num_plan_steps=num_plan_steps,
+                        consumed_tokens=consumed_token_count,
+                    )
+
+                cache_subdir.mkdir(parents=True, exist_ok=True)
+                with open(cache_filepath, 'wb') as f:
+                    pickle.dump(episode, f)
+
                 episode_files.append(str(cache_filepath))
-                continue
-            
-            logging.info(f"build {cache_filename}")
-            sub_df = df.iloc[i: i + action_horizon]
-            base_video_path = dataset_path / "videos" / parquet_path.parent.name
-            video_paths = adapter.resolve_video_paths(base_video_path, parquet_path)
-            missing_views = sorted(set(adapter.view_map) - set(video_paths))
-            for view_key in missing_views:
-                logging.warning(
-                    "missing video file for %s/%s view %s; tried %s",
-                    arm_name,
-                    dataset_name,
-                    view_key,
-                    ", ".join(adapter.view_map[view_key]),
-                )
-            if not video_paths:
-                logging.warning(
-                    "skipping %s/%s sample %s:%s because no configured video views exist",
-                    arm_name,
-                    dataset_name,
-                    parquet_path,
-                    start_idx,
-                )
-                continue
-
-            first_row = sub_df.iloc[0]
-            metadata = adapter.sample_metadata(first_row, parquet_path, start_idx)
-            
-            prompt = adapter.prompt(first_row, task_mapping, metadata)
-            if not prompt:
-                task_index = first_row.get("task_index", None)
-                logging.info(f"cannot find task description from task_index={task_index}")
-
-            episode = {
-                "arm_key": arm_name,
-                "dataset_key": dataset_name,
-                "prompt": prompt,
-                "state": adapter.state(first_row),
-                "action": [adapter.action(row) for _, row in sub_df.iterrows()],
-                "video_paths": video_paths,
-                "timestamp": adapter.timestamp(first_row, start_idx),
-                **metadata,
-            }
-            if coarse_enabled:
-                future_df = df.iloc[i: i + planning_horizon]
-                future_actions = [adapter.action(row) for _, row in future_df.iterrows()]
-                coarse_actions, coarse_action_mask = build_coarse_action_target(
-                    future_actions,
-                    num_plan_steps=int(coarse_action_config["num_plan_steps"]),
-                    planning_horizon=planning_horizon,
-                    valid_action_count=max(0, real_row_count - start_idx),
-                    action_convention=str(coarse_action_config.get("action_convention", "relative")),
-                    motion_indices=coarse_action_config.get("motion_indices") or None,
-                    gripper_indices=coarse_action_config.get("gripper_indices") or None,
-                )
-                episode["coarse_actions"] = coarse_actions
-                episode["coarse_action_mask"] = coarse_action_mask
-            
-            cache_subdir.mkdir(parents=True, exist_ok=True)
-            with open(cache_filepath, 'wb') as f:
-                pickle.dump(episode, f)
-            
-            episode_files.append(str(cache_filepath))
         return episode_files, None 
         
     except Exception as e:
@@ -313,7 +357,7 @@ class SimulationDataset(Dataset):
         binarize_gripper: bool = False,
         cache_dir: Union[str, Path] = None,  
         use_augmentation: bool = False,
-        coarse_action_config: Dict[str, Any] | None = None,
+        action_segment_config: Dict[str, Any] | None = None,
     ):
         self.config = config
 
@@ -328,9 +372,9 @@ class SimulationDataset(Dataset):
         self.max_samples_per_file = max_samples_per_file
         self.binarize_gripper = binarize_gripper
         self.use_augmentation = use_augmentation
-        self.coarse_action_config = dict(coarse_action_config or {})
-        self.coarse_action_enabled = bool(self.coarse_action_config.get("enabled", False))
-        self.coarse_action_dim = int(self.coarse_action_config.get("action_dim", self.max_action_dim))
+        self.action_segment_config = dict(action_segment_config or {})
+        self.action_segment_enabled = bool(self.action_segment_config.get("enabled", False))
+        self.action_segment_dim = int(self.action_segment_config.get("action_dim", self.max_action_dim))
 
 
         cache_dir_value = cache_dir if cache_dir is not None else os.getenv("HIMEM_CACHE_DIR")
@@ -443,7 +487,7 @@ class SimulationDataset(Dataset):
                         self.action_horizon,
                         self.max_samples_per_file,
                         self.cache_dir,
-                        self.coarse_action_config,
+                        self.action_segment_config,
                     ))
 
        
@@ -562,6 +606,27 @@ class SimulationDataset(Dataset):
         
         return frames
 
+    def _transform_and_pad_images(self, frames: List[Image.Image]) -> tuple[torch.Tensor, torch.Tensor]:
+        images = frames
+        if self.use_augmentation:
+            images = [
+                self.aug_transform(img) if random.random() < 0.5 else self.basic_transform(img)
+                for img in images
+            ]
+        else:
+            images = [self.basic_transform(img) for img in images]
+
+        num_real_views = len(images)
+        image_mask = torch.zeros(self.max_views, dtype=torch.bool)
+        image_mask[:num_real_views] = True
+        if image_mask.sum().item() == 0:
+            raise ValueError("sample has no valid image views")
+
+        while len(images) < self.max_views:
+            dummy_image = torch.zeros_like(images[0]) if images else torch.zeros(3, self.image_size, self.image_size)
+            images.append(dummy_image)
+        return torch.stack(images), image_mask
+
     def __len__(self):
         return len(self.data)
 
@@ -591,38 +656,12 @@ class SimulationDataset(Dataset):
 
  
         frames = self._load_video_frame(item["video_paths"], item["timestamp"])
-
-        images = frames
-
-
-        if self.use_augmentation:
-           
-            images = [
-                self.aug_transform(img) if random.random() < 0.5 else self.basic_transform(img)
-                for img in images
-            ]
-        else:
-         
-            images = [self.basic_transform(img) for img in images]
-
- 
-        num_real_views = len(images)
-        image_mask = torch.zeros(self.max_views, dtype=torch.bool)
-        image_mask[:num_real_views] = True 
-        if image_mask.sum().item() == 0:
-            raise ValueError(f"sample {cache_filepath} has no valid image views")
-
-
-        while len(images) < self.max_views:
-           
-            if len(images) == 0:
-                dummy_image = torch.zeros(3, self.image_size, self.image_size)
-                logging.info("Warning: Image list is empty, using zero tensor for padding")
-            else:
-                dummy_image = torch.zeros_like(images[0]) 
-            images.append(dummy_image)
-
-        images = torch.stack(images)
+        images, image_mask = self._transform_and_pad_images(frames)
+        planner_images = None
+        planner_image_mask = None
+        if "planner_timestamp" in item:
+            planner_frames = self._load_video_frame(item["video_paths"], item["planner_timestamp"])
+            planner_images, planner_image_mask = self._transform_and_pad_images(planner_frames)
 
 
         if item["state"] is None:
@@ -649,6 +688,17 @@ class SimulationDataset(Dataset):
             state, self.max_state_dim
         )
 
+        planner_state_value = item.get("planner_state", item["state"])
+        planner_state = torch.tensor(planner_state_value, dtype=torch.float32)
+        planner_state = minmax_normalize(
+            planner_state,
+            state_min.to(device=planner_state.device),
+            state_max.to(device=planner_state.device),
+        )
+        planner_state_padded, _ = self._pad_tensor(
+            planner_state, self.max_state_dim
+        )
+
 
         if item["action"] is None:
             raise ValueError("missing action, please check data integrity")
@@ -659,6 +709,8 @@ class SimulationDataset(Dataset):
         action_min = torch.tensor(norm_stats["action"]["min"], dtype=torch.float32, device=device)
         action_max = torch.tensor(norm_stats["action"]["max"], dtype=torch.float32, device=device)
         action = minmax_normalize(action, action_min.unsqueeze(0), action_max.unsqueeze(0))
+        if self.binarize_gripper and action.shape[-1] > 0:
+            action[..., -1] = (action[..., -1] > 0.5).to(action.dtype)
 
         action_padded, action_mask = self._pad_tensor(
             action, self.max_action_dim
@@ -673,13 +725,25 @@ class SimulationDataset(Dataset):
             "state": state_padded.to(dtype=torch.bfloat16),
             "action": action_padded.to(dtype=torch.bfloat16),
             "action_mask": action_mask,
-            "embodiment_id": torch.tensor(embodiment_id, dtype=torch.long)
+            "embodiment_id": torch.tensor(embodiment_id, dtype=torch.long),
+            "planner_prompt": item.get("planner_prompt", prompt),
+            "planner_state": planner_state_padded.to(dtype=torch.bfloat16),
         }
-        if "coarse_actions" in item and "coarse_action_mask" in item:
-            coarse_actions = torch.as_tensor(item["coarse_actions"], dtype=torch.float32)
-            coarse_actions_padded, _ = self._pad_tensor(coarse_actions, self.coarse_action_dim)
-            sample["coarse_actions"] = coarse_actions_padded.to(dtype=torch.bfloat16)
-            sample["coarse_action_mask"] = torch.as_tensor(item["coarse_action_mask"], dtype=torch.bool)
+        if planner_images is not None and planner_image_mask is not None:
+            sample["planner_images"] = planner_images
+            sample["planner_image_mask"] = planner_image_mask
+        if "action_segments" in item and "action_segment_mask" in item:
+            action_segments = torch.as_tensor(item["action_segments"], dtype=torch.float32)
+            if self.binarize_gripper and action_segments.shape[-1] > 0:
+                action_segments[..., -1] = (action_segments[..., -1] > 0.5).to(action_segments.dtype)
+            action_segments_padded, _ = self._pad_tensor(action_segments, self.action_segment_dim)
+            sample["action_segments"] = action_segments_padded.to(dtype=torch.bfloat16)
+            sample["action_segment_mask"] = torch.as_tensor(item["action_segment_mask"], dtype=torch.bool)
+        if "plan_active_mask" in item:
+            sample["plan_active_mask"] = torch.as_tensor(item["plan_active_mask"], dtype=torch.bool)
+        for plan_key in ("plan_consumed_steps", "plan_consumed_tokens", "plan_residual_steps"):
+            if plan_key in item:
+                sample[plan_key] = torch.tensor(int(item[plan_key]), dtype=torch.long)
         if "boundary" in item:
             sample["boundary"] = torch.tensor(float(item["boundary"]), dtype=torch.float32)
         if "progress" in item:

@@ -1,59 +1,21 @@
 # Coarse Planner LIBERO Horizon Ablation
 
-This note records the current Coarse Planner design used for the LIBERO-only warm-up experiments.
+Date: 2026-06-18
 
-## Module Boundary
+Status: historical baseline only. The target used here has been rejected and is
+being removed from the active implementation.
 
-The standalone planner input is:
+## What This Experiment Tested
 
-```text
-Z_t = InternVL3_14(observation_t, instruction)
-S_t = ProprioProjector(state_t)
-P_t, coarse_actions_t = CoarsePlanner(Q_plan, [Z_t, S_t])
-```
-
-`Z_t` contains observation and language. It does not contain robot proprioception. The state path is a two-layer projector:
+The old warm-up experiment trained Coarse Planner with a manually compressed
+coarse-action target:
 
 ```text
-LayerNorm(state_dim)
-Linear(state_dim, 896)
-GELU
-Linear(896, 896)
+motion_i = sum(actions[t+i*c : t+(i+1)*c, motion_dims])
+gripper_i = actions[t+(i+1)*c-1, gripper_dim]
 ```
 
-The planner does not read memory. Memory is a parallel condition later in BridgeAttention:
-
-```text
-C_bridge = [Q_action, S_t, P_t, M_t]
-```
-
-## LIBERO State and Action Targets
-
-LIBERO hdf5 demonstrations expose several state fields. For Evo-1 compatibility we use:
-
-```text
-state_raw = concat(obs/ee_states, obs/gripper_states)  # 8 dims
-state_norm = minmax_normalize(state_raw, Evo1_LIBERO/norm_stats.json)
-state = pad_to_24(state_norm)
-```
-
-Actions are 7D. Motion dimensions are kept in the raw relative action convention. The gripper dimension is converted from LIBERO env convention to model convention:
-
-```text
-env -1 -> model 1
-env  1 -> model 0
-```
-
-Coarse targets are built per chunk:
-
-```text
-motion_i = sum(actions[t+i*8 : t+(i+1)*8, 0:6])
-gripper_i = actions[t+(i+1)*8-1, 6]
-```
-
-## Horizon Sweep
-
-The boundary statistics from previous transition-trigger datasets center around 50-65 control steps, while LIBERO-Spatial/Goal/Object are short enough that 128-step targets cause heavy tail padding. The first sweep therefore fixes `chunk_size=8` and tests:
+For LIBERO, the sweep used `chunk_size=8`:
 
 ```text
 H=32, K=4
@@ -61,44 +23,48 @@ H=48, K=6
 H=64, K=8
 ```
 
-All three horizons share the same sampled `(suite, task, demo, timestep)` index. The build config currently samples up to 2048 points from LIBERO with `require_full_max_horizon=true`, so no target uses tail padding in the first ablation.
+The build used up to 2048 samples with a shared sampled index set across horizons.
 
-## Commands
-
-Dry run:
-
-```bash
-/root/autodl-tmp/miniforge3/envs/Evo1/bin/python -m coarse_planner.build_from_libero \
-  --config coarse_planner/configs/libero_horizon_ablation_build.yaml \
-  --dry-run
-```
-
-Build caches:
-
-```bash
-/root/autodl-tmp/miniforge3/envs/Evo1/bin/python -m coarse_planner.build_from_libero \
-  --config coarse_planner/configs/libero_horizon_ablation_build.yaml \
-  --device cuda
-```
-
-Train and analyze:
-
-```bash
-COARSE_PLANNER_BATCH_SIZE=512 \
-COARSE_PLANNER_EPOCHS=8 \
-scripts/run_coarse_planner_libero_ablation.sh
-```
-
-Outputs:
+## Recorded Results
 
 ```text
-/root/autodl-tmp/datasets/coarse_planner/libero_h32
-/root/autodl-tmp/datasets/coarse_planner/libero_h48
-/root/autodl-tmp/datasets/coarse_planner/libero_h64
-
-/root/autodl-tmp/runs/coarse_planner/libero_h32
-/root/autodl-tmp/runs/coarse_planner/libero_h48
-/root/autodl-tmp/runs/coarse_planner/libero_h64
-
-/root/autodl-tmp/runs/coarse_planner/libero_horizon_ablation_report.md
+H=32: val loss 0.725982, val MAE 1.121518, peak reserved 22.506 GB
+H=48: val loss 0.767584, val MAE 1.169856
+H=64: val loss 0.768933, val MAE 1.176484
 ```
+
+These results are useful only as a debugging record for the old target. They are
+not a validation of the current intent-latent planner design.
+
+## Why This Target Was Removed
+
+The compressed target collapses distinct action segments into the same label:
+
+```text
+A_i != A_j but sum(A_i) == sum(A_j)
+```
+
+That makes the planner learn `P_t -> sum(action_chunk)` instead of a latent that
+represents the full coarse intent of the segment.
+
+## Replacement Direction
+
+The active design replaces compressed targets with action-segment latents:
+
+```text
+z_i* = E_phi(A_i)
+z_hat_i = W_z P_i
+L_planner = lambda_z * ||z_hat_i - z_i*||^2 + lambda_A * rec(D_theta(z_hat_i), A_i)
+```
+
+Training and inference also use plan-token suffix semantics:
+
+```text
+P_tau = f_plan(H_tau, s_tau)
+t = tau + u*c
+P_active = P_tau[u:K]
+ActionHead(H_t, s_t, P_active, M_t)
+```
+
+No further training should be launched from the old ablation scripts until they
+are converted to the action-segment latent target.

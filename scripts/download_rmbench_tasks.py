@@ -3,7 +3,6 @@ from __future__ import annotations
 import argparse
 from email.message import Message
 import json
-import os
 from pathlib import Path
 import time
 from typing import Iterable

@@ -14,7 +14,7 @@ from PIL import Image
 
 from coarse_planner.config import load_config
 from coarse_planner.build_from_simulation import extract_planner_tokens, storage_dtype
-from himem_bridge_vla.dataset.coarse_actions import build_coarse_action_target
+from himem_bridge_vla.dataset.action_segments import build_action_segment_target
 from himem_bridge_vla.utils.normalization import minmax_normalize
 
 
@@ -43,6 +43,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--max-samples", type=int, default=None, help="Override data.max_samples.")
     parser.add_argument("--samples-per-episode", type=int, default=None, help="Override libero.samples_per_episode.")
+    parser.add_argument("--seed", type=int, default=None, help="Override config seed for sample indexing and splits.")
     parser.add_argument("--regenerate-sample-index", action="store_true")
     parser.add_argument("--horizons", nargs="*", type=int, default=None, help="Override libero.horizons.")
     return parser.parse_args()
@@ -55,6 +56,8 @@ def main() -> int:
         config["data"]["max_samples"] = int(args.max_samples)
     if args.samples_per_episode is not None:
         config.setdefault("libero", {})["samples_per_episode"] = int(args.samples_per_episode)
+    if args.seed is not None:
+        config["seed"] = int(args.seed)
     if args.sample_index is not None:
         config.setdefault("libero", {})["sample_index_path"] = args.sample_index
     if args.horizons:
@@ -164,7 +167,7 @@ def build_libero_horizon_caches(
                     eval_split=eval_split,
                 )
                 for horizon in horizons:
-                    target = _coarse_target_for_horizon(
+                    target = _action_segment_target_for_horizon(
                         actions,
                         frame_index,
                         horizon=horizon,
@@ -174,8 +177,8 @@ def build_libero_horizon_caches(
                     record = {
                         "vlm_tokens": tokens.detach().cpu(),
                         "state": torch.from_numpy(state).float(),
-                        "coarse_actions": torch.from_numpy(target["coarse_actions"]).float(),
-                        "coarse_action_mask": torch.from_numpy(target["coarse_action_mask"]).float(),
+                        "action_segments": torch.from_numpy(target["action_segments"]).float(),
+                        "action_segment_mask": torch.from_numpy(target["action_segment_mask"]).float(),
                         "episode_id": str(entry["episode_id"]),
                         "frame_index": int(frame_index),
                         "source_path": str(hdf5_path),
@@ -209,6 +212,7 @@ def build_libero_horizon_caches(
         manifest = {
             "format": "planner_feature_cache",
             "version": 1,
+            "supervision": "action_segment_latent",
             "num_samples": num_samples[horizon],
             "split_counts": split_counts[horizon],
             "target": _target_config_for_horizon(config, horizon, chunk_size),
@@ -249,11 +253,12 @@ class LiberoNormalizer:
         return _pad_np(normalized, self.state_dim)
 
     def actions(self, actions: Any) -> np.ndarray:
-        action_array = np.asarray(actions, dtype=np.float32).copy()
-        if self.gripper_to_binary and action_array.shape[1] >= 7:
-            action_array[:, 6] = (action_array[:, 6] < 0.0).astype(np.float32)
+        raw_action_array = np.asarray(actions, dtype=np.float32)
+        action_array = raw_action_array.copy()
         if self.normalize_actions:
             action_array = _minmax_np(action_array, self.action_min, self.action_max)
+        if self.gripper_to_binary and action_array.shape[1] >= 7:
+            action_array[:, 6] = (raw_action_array[:, 6] < 0.0).astype(np.float32)
         return action_array
 
 
@@ -384,7 +389,7 @@ def _load_or_create_sample_index(
     return entries
 
 
-def _coarse_target_for_horizon(
+def _action_segment_target_for_horizon(
     actions: np.ndarray,
     frame_index: int,
     *,
@@ -396,16 +401,16 @@ def _coarse_target_for_horizon(
     future = np.zeros((horizon, actions.shape[1]), dtype=np.float32)
     if valid_count > 0:
         future[:valid_count] = actions[frame_index : frame_index + valid_count]
-    coarse_actions, coarse_mask = build_coarse_action_target(
+    action_segments, action_segment_mask = build_action_segment_target(
         future,
         num_plan_steps=horizon // chunk_size,
         planning_horizon=horizon,
         valid_action_count=valid_count,
-        action_convention=str(config["target"].get("action_convention", "relative")),
-        motion_indices=config["target"].get("motion_indices"),
-        gripper_indices=config["target"].get("gripper_indices"),
     )
-    return {"coarse_actions": coarse_actions, "coarse_action_mask": coarse_mask.astype(np.float32)}
+    return {
+        "action_segments": action_segments,
+        "action_segment_mask": action_segment_mask.astype(np.float32),
+    }
 
 
 def _flush_libero_shard(
@@ -424,8 +429,8 @@ def _flush_libero_shard(
     payload = {
         "vlm_tokens": torch.stack([sample["vlm_tokens"].to(dtype=dtype) for sample in samples], dim=0),
         "state": torch.stack([sample["state"] for sample in samples], dim=0),
-        "coarse_actions": torch.stack([sample["coarse_actions"] for sample in samples], dim=0),
-        "coarse_action_mask": torch.stack([sample["coarse_action_mask"] for sample in samples], dim=0),
+        "action_segments": torch.stack([sample["action_segments"] for sample in samples], dim=0),
+        "action_segment_mask": torch.stack([sample["action_segment_mask"] for sample in samples], dim=0),
         "episode_id": [sample["episode_id"] for sample in samples],
         "frame_index": torch.tensor([sample["frame_index"] for sample in samples], dtype=torch.long),
         "source_path": [sample["source_path"] for sample in samples],

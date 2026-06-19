@@ -8,8 +8,8 @@ Runtime recommendation:
 
 ```text
 config: transition_trigger/configs/selected/robomme_rmbench_w32_value_delta_transformer_d512.yaml
-checkpoint: /root/autodl-tmp/runs/transition_trigger/selected/robomme_rmbench_w32_value_delta_transformer_d512/checkpoint.pt
-source run: /root/autodl-tmp/runs/transition_trigger/robomme_rmbench_ablations/w32_value_delta_mask_transformer_d512
+checkpoint: $AUTODL_TMP/runs/transition_trigger/selected/robomme_rmbench_w32_value_delta_transformer_d512/checkpoint.pt
+source run: $AUTODL_TMP/runs/transition_trigger/robomme_rmbench_ablations/w32_value_delta_mask_transformer_d512
 checkpoint type: best_memory_write
 ```
 
@@ -33,7 +33,7 @@ This is the transition-trigger head only. It is separate from the HiMem/InternVL
 remote runtime cache contains `OpenGVLab/InternVL3-1B` under:
 
 ```text
-/root/autodl-tmp/hf-home/hub/models--OpenGVLab--InternVL3-1B
+$AUTODL_TMP/hf-home/hub/models--OpenGVLab--InternVL3-1B
 snapshot: 4415a3b810e636d11dfa86b0e9ba40bb00535aa8
 model.safetensors: 1,876,463,472 bytes
 ```
@@ -41,7 +41,7 @@ model.safetensors: 1,876,463,472 bytes
 Boundary upper checkpoint:
 
 ```text
-checkpoint: /root/autodl-tmp/runs/transition_trigger/selected/robomme_rmbench_w32_value_delta_transformer_d512/boundary_upper_checkpoint.pt
+checkpoint: $AUTODL_TMP/runs/transition_trigger/selected/robomme_rmbench_w32_value_delta_transformer_d512/boundary_upper_checkpoint.pt
 checkpoint type: best_event_f1
 ```
 
@@ -51,7 +51,7 @@ quality. Use the selected checkpoint for system integration.
 Conservative memory-write fallback:
 
 ```text
-checkpoint: /root/autodl-tmp/runs/transition_trigger/selected/robomme_rmbench_w32_value_delta_transformer_d512/conservative_memory_checkpoint.pt
+checkpoint: $AUTODL_TMP/runs/transition_trigger/selected/robomme_rmbench_w32_value_delta_transformer_d512/conservative_memory_checkpoint.pt
 source run: w24_value_delta_mask_transformer_d512
 checkpoint type: best_memory_write
 ```
@@ -72,7 +72,7 @@ Online replay:
 
 ```bash
 python transition_trigger/scripts/evaluate_runtime_policy.py \
-  --package-dir /root/autodl-tmp/runs/transition_trigger/selected/robomme_rmbench_w32_value_delta_transformer_d512 \
+  --package-dir $AUTODL_TMP/runs/transition_trigger/selected/robomme_rmbench_w32_value_delta_transformer_d512 \
   --split test \
   --device cuda
 ```
@@ -275,7 +275,7 @@ runtime observability path.
 
 ```text
 run:
-/root/autodl-tmp/HiMem-Bridge-VLA/runs/transition_trigger/libero_closed_loop_trace_smoke/20260617_212202_trace_jsonl_smoke
+$AUTODL_TMP/HiMem-Bridge-VLA/runs/transition_trigger/libero_closed_loop_trace_smoke/20260617_212202_trace_jsonl_smoke
 
 trace:
 runs/transition_trigger/libero_closed_loop_trace_smoke/20260617_212202_trace_jsonl_smoke/client/results/transition_trace_smoke_transition_trace.jsonl
@@ -323,20 +323,20 @@ as the main ablation figure.
 
 ```text
 summary table:
-/root/autodl-tmp/runs/transition_trigger/robomme_rmbench_ablations/ablation_summary.tsv
+$AUTODL_TMP/runs/transition_trigger/robomme_rmbench_ablations/ablation_summary.tsv
 
 selected runtime package:
-/root/autodl-tmp/runs/transition_trigger/selected/robomme_rmbench_w32_value_delta_transformer_d512
+$AUTODL_TMP/runs/transition_trigger/selected/robomme_rmbench_w32_value_delta_transformer_d512
 
 selected package manifest:
-/root/autodl-tmp/runs/transition_trigger/selected/robomme_rmbench_w32_value_delta_transformer_d512/manifest.json
+$AUTODL_TMP/runs/transition_trigger/selected/robomme_rmbench_w32_value_delta_transformer_d512/manifest.json
 
 online replay outputs:
-/root/autodl-tmp/runs/transition_trigger/selected/robomme_rmbench_w32_value_delta_transformer_d512/runtime_policy_eval.json
-/root/autodl-tmp/runs/transition_trigger/selected/robomme_rmbench_w32_value_delta_transformer_d512/runtime_policy_test.json
+$AUTODL_TMP/runs/transition_trigger/selected/robomme_rmbench_w32_value_delta_transformer_d512/runtime_policy_eval.json
+$AUTODL_TMP/runs/transition_trigger/selected/robomme_rmbench_w32_value_delta_transformer_d512/runtime_policy_test.json
 
 per-run training/evaluation logs:
-/root/autodl-tmp/runs/transition_trigger/robomme_rmbench_ablations/<run_name>/train.log
-/root/autodl-tmp/runs/transition_trigger/robomme_rmbench_ablations/<run_name>/train_history.json
-/root/autodl-tmp/runs/transition_trigger/robomme_rmbench_ablations/<run_name>/test_metrics_*.json
+$AUTODL_TMP/runs/transition_trigger/robomme_rmbench_ablations/<run_name>/train.log
+$AUTODL_TMP/runs/transition_trigger/robomme_rmbench_ablations/<run_name>/train_history.json
+$AUTODL_TMP/runs/transition_trigger/robomme_rmbench_ablations/<run_name>/test_metrics_*.json
 ```

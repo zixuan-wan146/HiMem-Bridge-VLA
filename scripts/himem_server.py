@@ -160,6 +160,8 @@ def infer_from_json_dict(data: dict, model, normalizer, transition_manager: Serv
             reset_memory=request["reset_memory"],
             memory_write_gate=memory_write_gate,
             coarse_plan_refresh=coarse_plan_refresh,
+            executed_control_steps=request["executed_control_steps"],
+            requested_execute_steps=request["requested_execute_steps"],
         )
         if action.numel() % model_action_dim != 0:
             raise ValueError(f"Model returned {action.numel()} action values, not divisible by per_action_dim={model_action_dim}")

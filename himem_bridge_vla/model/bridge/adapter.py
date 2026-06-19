@@ -90,6 +90,7 @@ class BridgeAdapter(nn.Module):
         hidden_states: list[torch.Tensor] | tuple[torch.Tensor, ...] | None = None,
         state: torch.Tensor | None = None,
         plan_tokens: torch.Tensor | None = None,
+        plan_token_mask: torch.Tensor | None = None,
         memory_context: torch.Tensor | None = None,
     ) -> BridgeAdapterOutput:
         fused_tokens = _ensure_rank3(fused_tokens, "fused_tokens")
@@ -101,6 +102,15 @@ class BridgeAdapter(nn.Module):
         action_queries = self.action_queries.to(device=device, dtype=dtype).unsqueeze(0).expand(batch_size, -1, -1)
         proprio_embedding = self._project_state(state, batch_size, device, dtype)
         plan_tokens = self._prepare_plan_tokens(plan_tokens, device, dtype)
+        query_key_padding_mask = self._build_query_key_padding_mask(
+            batch_size=batch_size,
+            action_query_count=action_queries.shape[1],
+            proprio_count=proprio_embedding.shape[1],
+            plan_tokens=plan_tokens,
+            plan_token_mask=plan_token_mask,
+            memory_context=memory_context,
+            device=device,
+        )
         memory_context = self._project_memory(memory_context, device, dtype)
 
         raw_layers = _normalize_hidden_states(hidden_states, fused_tokens)
@@ -113,6 +123,7 @@ class BridgeAdapter(nn.Module):
                 proprio_embedding=proprio_embedding,
                 plan_tokens=plan_tokens,
                 memory_context=memory_context,
+                query_key_padding_mask=query_key_padding_mask,
             )
 
         bridge_tokens = self.output_norm(action_tokens)
@@ -176,6 +187,41 @@ class BridgeAdapter(nn.Module):
         if plan_tokens.shape[-1] != self.config.embed_dim:
             raise ValueError(f"plan_tokens last dimension {plan_tokens.shape[-1]} != embed_dim {self.config.embed_dim}")
         return plan_tokens
+
+    def _build_query_key_padding_mask(
+        self,
+        *,
+        batch_size: int,
+        action_query_count: int,
+        proprio_count: int,
+        plan_tokens: torch.Tensor | None,
+        plan_token_mask: torch.Tensor | None,
+        memory_context: torch.Tensor | None,
+        device: torch.device,
+    ) -> torch.Tensor | None:
+        masks = [
+            torch.zeros(batch_size, action_query_count, dtype=torch.bool, device=device),
+            torch.zeros(batch_size, proprio_count, dtype=torch.bool, device=device),
+        ]
+        if plan_tokens is not None and plan_tokens.shape[1] > 0:
+            if plan_token_mask is None:
+                masks.append(torch.zeros(batch_size, plan_tokens.shape[1], dtype=torch.bool, device=device))
+            else:
+                plan_token_mask = plan_token_mask.to(device=device).bool()
+                if plan_token_mask.shape != plan_tokens.shape[:2]:
+                    raise ValueError(
+                        f"plan_token_mask shape {tuple(plan_token_mask.shape)} must match "
+                        f"plan token prefix {tuple(plan_tokens.shape[:2])}"
+                    )
+                masks.append(~plan_token_mask)
+        if memory_context is not None:
+            memory_context = _ensure_rank3(memory_context, "memory_context")
+            if memory_context.shape[1] > 0:
+                masks.append(torch.zeros(batch_size, memory_context.shape[1], dtype=torch.bool, device=device))
+        if not masks:
+            return None
+        merged = torch.cat(masks, dim=1)
+        return merged if merged.any() else None
 
 
 def _normalize_hidden_states(

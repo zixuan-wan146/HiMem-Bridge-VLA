@@ -53,59 +53,88 @@ def progress_smooth_l1_loss(progress_logits: Any, progress_labels: Any) -> Any:
     return F.smooth_l1_loss(prediction, labels)
 
 
-def coarse_planner_smooth_l1_loss(
-    predicted_actions: Any,
-    target_actions: Any,
-    step_mask: Any,
+def masked_latent_mse_loss(
+    predicted_latents: Any,
+    target_latents: Any,
+    segment_mask: Any,
     *,
-    gripper_indices: Any = (-1,),
-    gripper_loss_weight: float = 1.0,
-    smoothness_weight: float = 0.0,
+    token_loss_weights: Any = None,
 ) -> Any:
-    """Masked Smooth L1 loss for coarse future-action supervision."""
+    """Masked MSE over action-segment intent latents."""
 
-    import torch
-    import torch.nn.functional as F
-
-    if predicted_actions.shape != target_actions.shape:
+    if predicted_latents.shape != target_latents.shape:
         raise ValueError(
-            f"predicted_actions shape {predicted_actions.shape} != target_actions shape {target_actions.shape}"
+            f"predicted_latents shape {predicted_latents.shape} != target_latents shape {target_latents.shape}"
         )
-    if predicted_actions.ndim != 3:
-        raise ValueError(f"coarse planner actions must have shape [B, K, A], got {predicted_actions.shape}")
+    if predicted_latents.ndim != 3:
+        raise ValueError(f"planner latents must have shape [B, K, Z], got {predicted_latents.shape}")
 
-    mask = step_mask.to(device=predicted_actions.device, dtype=predicted_actions.dtype)
+    mask = segment_mask.to(device=predicted_latents.device, dtype=predicted_latents.dtype)
     if mask.ndim == 3 and mask.shape[-1] == 1:
         mask = mask.squeeze(-1)
-    if mask.shape != predicted_actions.shape[:2]:
-        raise ValueError(f"step_mask shape {mask.shape} != coarse step shape {predicted_actions.shape[:2]}")
+    if mask.shape != predicted_latents.shape[:2]:
+        raise ValueError(f"segment_mask shape {mask.shape} != planner latent shape {predicted_latents.shape[:2]}")
+    mask = _apply_token_loss_weights(mask, token_loss_weights)
     active_steps = mask.sum()
     if active_steps.item() == 0:
-        raise ValueError("coarse_action_mask.sum() is 0. All coarse plan steps are masked.")
+        raise ValueError("action_segment_mask.sum() is 0. All action segments are masked.")
 
-    action_dim = predicted_actions.shape[-1]
-    dim_weights = torch.ones(action_dim, device=predicted_actions.device, dtype=predicted_actions.dtype)
-    for index in _normalize_indices(gripper_indices, action_dim):
-        dim_weights[index] = float(gripper_loss_weight)
-    if dim_weights.sum().item() <= 0:
-        raise ValueError("coarse planner dimension weights must contain at least one positive value")
+    squared = (predicted_latents - target_latents.to(device=predicted_latents.device, dtype=predicted_latents.dtype)).pow(2)
+    per_step = squared.mean(dim=-1)
+    return (per_step * mask).sum() / active_steps
 
-    element_loss = F.smooth_l1_loss(
-        predicted_actions,
-        target_actions.to(device=predicted_actions.device, dtype=predicted_actions.dtype),
-        reduction="none",
+
+def coarse_planner_intent_loss(
+    predicted_latents: Any,
+    target_latents: Any,
+    decoded_segments: Any,
+    target_segments: Any,
+    segment_mask: Any,
+    *,
+    latent_loss_weight: float = 1.0,
+    chunk_loss_weight: float = 1.0,
+    gripper_indices: Any = (-1,),
+    gripper_loss_weight: float = 1.0,
+    token_loss_weights: Any = None,
+) -> Any:
+    """Planner auxiliary loss: latent regression plus decoded chunk reconstruction."""
+
+    from himem_bridge_vla.model.planner import action_segment_reconstruction_loss
+
+    weighted_mask = _apply_token_loss_weights(
+        segment_mask.to(device=predicted_latents.device, dtype=predicted_latents.dtype),
+        token_loss_weights,
     )
-    per_step_loss = (element_loss * dim_weights.view(1, 1, -1)).sum(dim=-1) / dim_weights.sum()
-    loss = (per_step_loss * mask).sum() / active_steps
+    latent_loss = masked_latent_mse_loss(
+        predicted_latents,
+        target_latents,
+        weighted_mask,
+    )
+    chunk_loss = action_segment_reconstruction_loss(
+        decoded_segments,
+        target_segments,
+        weighted_mask,
+        gripper_indices=gripper_indices,
+        gripper_loss_weight=gripper_loss_weight,
+    )
+    return float(latent_loss_weight) * latent_loss + float(chunk_loss_weight) * chunk_loss
 
-    if smoothness_weight > 0.0 and predicted_actions.shape[1] > 1:
-        pair_mask = mask[:, 1:] * mask[:, :-1]
-        active_pairs = pair_mask.sum()
-        if active_pairs.item() > 0:
-            smoothness = (predicted_actions[:, 1:] - predicted_actions[:, :-1]).abs().mean(dim=-1)
-            loss = loss + float(smoothness_weight) * (smoothness * pair_mask).sum() / active_pairs
 
-    return loss
+def _apply_token_loss_weights(mask: Any, token_loss_weights: Any = None) -> Any:
+    if mask.ndim == 3 and mask.shape[-1] == 1:
+        mask = mask.squeeze(-1)
+    if token_loss_weights is None:
+        return mask
+    import torch
+
+    weights = torch.as_tensor(token_loss_weights, device=mask.device, dtype=mask.dtype)
+    if weights.ndim != 1:
+        raise ValueError(f"token_loss_weights must be a 1D sequence, got shape {tuple(weights.shape)}")
+    if weights.shape[0] != mask.shape[-1]:
+        raise ValueError(f"token_loss_weights length {weights.shape[0]} != num plan tokens {mask.shape[-1]}")
+    if weights.min().item() <= 0.0:
+        raise ValueError("token_loss_weights must be positive")
+    return mask * weights.unsqueeze(0)
 
 
 def _normalize_indices(indices: Any, action_dim: int) -> tuple[int, ...]:

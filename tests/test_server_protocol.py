@@ -59,6 +59,25 @@ def test_validate_inference_request_accepts_optional_memory_fields():
     assert request["return_debug"] is True
 
 
+def test_validate_inference_request_accepts_plan_queue_feedback():
+    payload = valid_request()
+    payload["executed_control_steps"] = 4
+    payload["requested_execute_steps"] = 16
+
+    request = validate_inference_request(payload, target_state_dim=6)
+
+    assert request["executed_control_steps"] == 4
+    assert request["requested_execute_steps"] == 16
+
+
+def test_validate_inference_request_rejects_negative_plan_queue_feedback():
+    payload = valid_request()
+    payload["executed_control_steps"] = -1
+
+    with pytest.raises(ValueError, match="executed_control_steps"):
+        validate_inference_request(payload, target_state_dim=6)
+
+
 def test_validate_inference_request_accepts_transition_frame():
     payload = valid_request()
     payload["episode_id"] = "episode-a"

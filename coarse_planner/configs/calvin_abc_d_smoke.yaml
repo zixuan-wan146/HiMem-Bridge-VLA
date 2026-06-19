@@ -26,14 +26,23 @@ simulation:
 target:
   num_plan_steps: 4
   planning_horizon: 32
-  action_convention: relative
-  motion_indices: [0, 1, 2, 3, 4, 5]
   gripper_indices: [6]
+
+segment_autoencoder:
+  checkpoint: /root/autodl-tmp/runs/coarse_planner/calvin_abc_d_smoke_segment_ae/best.pt
+  latent_dim: 64
+  hidden_dim: 256
+  num_layers: 2
+  dropout: 0.0
+  distance_loss_weight: 0.1
+  dct_low_frequency: 4
+  endpoint_distance_weight: 1.0
+  gripper_distance_weight: 1.0
 
 model:
   hidden_dim: auto
-  action_dim: auto
   state_dim: auto
+  latent_dim: null
   num_layers: 3
   num_heads: 8
   dropout: 0.0
@@ -49,7 +58,9 @@ training:
 loss:
   gripper_indices: [6]
   gripper_loss_weight: 2.0
-  smoothness_weight: 0.01
+  latent_loss_weight: 1.0
+  chunk_loss_weight: 1.0
 
 outputs:
   run_dir: /root/autodl-tmp/runs/coarse_planner/calvin_abc_d_smoke
+  segment_ae_run_dir: /root/autodl-tmp/runs/coarse_planner/calvin_abc_d_smoke_segment_ae

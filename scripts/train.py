@@ -34,7 +34,7 @@ from himem_bridge_vla.reproducibility import (
 )
 from himem_bridge_vla.training_loss import (
     boundary_bce_loss,
-    coarse_planner_smooth_l1_loss,
+    coarse_planner_intent_loss,
     masked_flow_matching_mse,
     progress_smooth_l1_loss,
 )
@@ -164,6 +164,39 @@ def validate_batch_image_masks(image_masks, step: int) -> None:
         )
 
 
+def encode_batch_embeddings(model, prompts, images_batch, image_masks, *, return_hidden_states: bool):
+    fused_tokens_list = []
+    hidden_states_per_sample = []
+
+    for prompt, images, image_mask in zip(prompts, images_batch, image_masks):
+        embedding = model.get_vl_embeddings(
+            images=images,
+            image_mask=image_mask,
+            prompt=prompt,
+            return_cls_only=False,
+            return_hidden_states=return_hidden_states,
+        )
+        if hasattr(embedding, "fused_tokens"):
+            fused_tokens_list.append(embedding.fused_tokens.to(dtype=torch.bfloat16))
+            hidden_states_per_sample.append(
+                [hidden_state.to(dtype=torch.bfloat16) for hidden_state in embedding.hidden_states]
+            )
+        else:
+            fused_tokens_list.append(embedding.to(dtype=torch.bfloat16))
+
+    fused_tokens = torch.cat(fused_tokens_list, dim=0)
+    hidden_states = None
+    if hidden_states_per_sample:
+        layer_count = len(hidden_states_per_sample[0])
+        if any(len(sample) != layer_count for sample in hidden_states_per_sample):
+            raise ValueError("All samples must return the same number of selected hidden-state layers")
+        hidden_states = [
+            torch.cat([sample[layer_index] for sample in hidden_states_per_sample], dim=0)
+            for layer_index in range(layer_count)
+        ]
+    return fused_tokens, hidden_states
+
+
 def compute_bridge_auxiliary_loss(model, batch: dict, config: dict) -> tuple[Any, dict[str, float]]:
     bridge_output = getattr(unwrap_training_model(model), "last_bridge_output", None)
     if bridge_output is None:
@@ -187,18 +220,57 @@ def compute_bridge_auxiliary_loss(model, batch: dict, config: dict) -> tuple[Any
     return aux_loss, metrics
 
 
-def compute_coarse_planner_loss(model, batch: dict, config: dict) -> tuple[Any, dict[str, float]]:
+def load_action_segment_autoencoder(checkpoint_path: str | None, *, device: Any):
+    if not checkpoint_path:
+        return None
+    from himem_bridge_vla.model.planner import ActionSegmentAutoencoder, ActionSegmentAutoencoderConfig
+
+    checkpoint_file = Path(str(checkpoint_path)).expanduser()
+    if not checkpoint_file.is_absolute():
+        checkpoint_file = project_path(checkpoint_file, REPO_ROOT)
+    checkpoint = torch.load(checkpoint_file, map_location=device, weights_only=False)
+    raw_config = checkpoint.get("segment_autoencoder_config") or checkpoint.get("autoencoder_config")
+    if raw_config is None:
+        raise KeyError(f"segment autoencoder checkpoint lacks config: {checkpoint_path}")
+    state_dict = checkpoint.get("segment_autoencoder_state_dict") or checkpoint.get("model")
+    if state_dict is None:
+        raise KeyError(f"segment autoencoder checkpoint lacks weights: {checkpoint_path}")
+    autoencoder = ActionSegmentAutoencoder(ActionSegmentAutoencoderConfig(**raw_config)).to(device)
+    autoencoder.load_state_dict(state_dict)
+    autoencoder.eval()
+    for parameter in autoencoder.parameters():
+        parameter.requires_grad = False
+    return autoencoder
+
+
+def compute_coarse_planner_loss(model, batch: dict, config: dict, segment_autoencoder=None) -> tuple[Any, dict[str, float]]:
     planner_output = getattr(unwrap_training_model(model), "last_coarse_planner_output", None)
-    if planner_output is None or "coarse_actions" not in batch or "coarse_action_mask" not in batch:
+    if planner_output is None or segment_autoencoder is None:
+        return None, {}
+    if "action_segments" not in batch or "action_segment_mask" not in batch:
         return None, {}
 
-    planner_loss = coarse_planner_smooth_l1_loss(
-        planner_output.coarse_actions,
-        batch["coarse_actions"],
-        batch["coarse_action_mask"],
+    action_segments = batch["action_segments"].to(
+        device=planner_output.predicted_latents.device,
+        dtype=planner_output.predicted_latents.dtype,
+    )
+    segment_mask = batch["action_segment_mask"].to(device=planner_output.predicted_latents.device)
+    torch_module = torch
+    if torch_module is None:
+        import torch as torch_module
+    with torch_module.no_grad():
+        target_latents = segment_autoencoder.encode(action_segments)
+    decoded_segments = segment_autoencoder.decode(planner_output.predicted_latents)
+    planner_loss = coarse_planner_intent_loss(
+        planner_output.predicted_latents,
+        target_latents,
+        decoded_segments,
+        action_segments,
+        segment_mask,
+        latent_loss_weight=float(config.get("coarse_planner_latent_loss_weight", 1.0)),
+        chunk_loss_weight=float(config.get("coarse_planner_chunk_loss_weight", 1.0)),
         gripper_indices=config.get("coarse_planner_gripper_indices", [-1]),
         gripper_loss_weight=float(config.get("coarse_planner_gripper_loss_weight", 2.0)),
-        smoothness_weight=float(config.get("coarse_planner_smoothness_weight", 0.01)),
     )
     loss_weight = float(config.get("coarse_planner_loss_weight", 0.2))
     weighted_loss = loss_weight * planner_loss
@@ -226,10 +298,21 @@ def custom_collate_fn(batch):
         "image_masks": image_masks,
         "embodiment_ids": embodiment_ids
     }
+    if all("planner_prompt" in item for item in batch):
+        batch_dict["planner_prompts"] = [item["planner_prompt"] for item in batch]
+    if all("planner_images" in item for item in batch):
+        batch_dict["planner_images"] = [item["planner_images"] for item in batch]
+    if all("planner_image_mask" in item for item in batch):
+        batch_dict["planner_image_masks"] = torch.stack([item["planner_image_mask"] for item in batch], dim=0)
+    if all("planner_state" in item for item in batch):
+        batch_dict["planner_states"] = torch.stack([item["planner_state"] for item in batch], dim=0)
     for optional_key in ("boundary", "progress", "skill_id"):
         if all(optional_key in item for item in batch):
             batch_dict[optional_key] = torch.stack([item[optional_key] for item in batch], dim=0)
-    for optional_key in ("coarse_actions", "coarse_action_mask"):
+    for optional_key in ("action_segments", "action_segment_mask", "plan_active_mask"):
+        if all(optional_key in item for item in batch):
+            batch_dict[optional_key] = torch.stack([item[optional_key] for item in batch], dim=0)
+    for optional_key in ("plan_consumed_steps", "plan_consumed_tokens", "plan_residual_steps"):
         if all(optional_key in item for item in batch):
             batch_dict[optional_key] = torch.stack([item[optional_key] for item in batch], dim=0)
     for optional_key in ("episode_id", "frame_index", "global_frame_index", "segment_id", "segment_start", "segment_end"):
@@ -343,7 +426,7 @@ def prepare_dataset(config: dict) -> torch.utils.data.Dataset:
             binarize_gripper=binarize_gripper,
             cache_dir=config.get("cache_dir"),
             use_augmentation=use_augmentation,
-            coarse_action_config=build_coarse_action_dataset_config(config),
+            action_segment_config=build_action_segment_dataset_config(config),
         )
     else:
         raise ValueError(f"Unknown dataset_type: {dataset_type}")
@@ -358,7 +441,7 @@ def prepare_dataset(config: dict) -> torch.utils.data.Dataset:
     return dataset
 
 
-def build_coarse_action_dataset_config(config: dict) -> dict | None:
+def build_action_segment_dataset_config(config: dict) -> dict | None:
     if not bool(config.get("coarse_planner_enabled", False)):
         return None
     return {
@@ -366,9 +449,8 @@ def build_coarse_action_dataset_config(config: dict) -> dict | None:
         "num_plan_steps": int(config.get("coarse_planner_num_plan_steps", 16)),
         "planning_horizon": int(config.get("coarse_planner_planning_horizon", 128)),
         "action_dim": int(config.get("coarse_planner_action_dim", config.get("per_action_dim", 7))),
-        "action_convention": str(config.get("coarse_planner_action_convention", "relative")),
-        "motion_indices": list(config.get("coarse_planner_motion_indices", [])),
-        "gripper_indices": list(config.get("coarse_planner_gripper_indices", [-1])),
+        "execution_horizon": int(config.get("coarse_planner_execution_horizon", config.get("horizon", 16))),
+        "suffix_stride_tokens": config.get("coarse_planner_suffix_stride_tokens"),
     }
 
 
@@ -683,6 +765,11 @@ def train(config):
             modules_to_inspect["memory_writer"] = unwrapped_model.memory_writer
         inspect_named_submodules(modules_to_inspect)
 
+    segment_autoencoder = load_action_segment_autoencoder(
+        config.get("coarse_planner_segment_autoencoder_checkpoint"),
+        device=accelerator.device,
+    )
+
     # === Training Loop ===
     while step < max_steps:
         for batch in tqdm(dataloader, desc="Training", disable=not accelerator.is_main_process):
@@ -696,35 +783,30 @@ def train(config):
             action_mask = batch["action_mask"]
             embodiment_ids = batch["embodiment_ids"]
             validate_batch_image_masks(image_masks, step)
-            fused_tokens_list = []
-            hidden_states_per_sample = []
-            
-            for prompt, images, image_mask in zip(prompts, images_batch, image_masks):
-                embedding = model.get_vl_embeddings(
-                    images=images,
-                    image_mask=image_mask,
-                    prompt=prompt,
-                    return_cls_only=False,
-                    return_hidden_states=bridge_enabled,
+            fused_tokens, hidden_states = encode_batch_embeddings(
+                model,
+                prompts,
+                images_batch,
+                image_masks,
+                return_hidden_states=bridge_enabled,
+            )
+            planner_fused_tokens = None
+            planner_states = None
+            plan_token_mask = batch.get("plan_active_mask")
+            if "planner_images" in batch:
+                planner_image_masks = batch.get("planner_image_masks")
+                if planner_image_masks is None:
+                    raise ValueError("planner_images requires planner_image_masks")
+                validate_batch_image_masks(planner_image_masks, step)
+                planner_fused_tokens, _ = encode_batch_embeddings(
+                    model,
+                    batch.get("planner_prompts", prompts),
+                    batch["planner_images"],
+                    planner_image_masks,
+                    return_hidden_states=False,
                 )
-                if hasattr(embedding, "fused_tokens"):
-                    fused_tokens_list.append(embedding.fused_tokens.to(dtype=torch.bfloat16))
-                    hidden_states_per_sample.append(
-                        [hidden_state.to(dtype=torch.bfloat16) for hidden_state in embedding.hidden_states]
-                    )
-                else:
-                    fused_tokens_list.append(embedding.to(dtype=torch.bfloat16))
-            
-            fused_tokens = torch.cat(fused_tokens_list, dim=0)
-            hidden_states = None
-            if hidden_states_per_sample:
-                layer_count = len(hidden_states_per_sample[0])
-                if any(len(sample) != layer_count for sample in hidden_states_per_sample):
-                    raise ValueError("All samples must return the same number of selected hidden-state layers")
-                hidden_states = [
-                    torch.cat([sample[layer_index] for sample in hidden_states_per_sample], dim=0)
-                    for layer_index in range(layer_count)
-                ]
+            if "planner_states" in batch:
+                planner_states = batch["planner_states"].to(dtype=torch.bfloat16)
 
             with get_autocast_context(accelerator.device):
 
@@ -735,6 +817,9 @@ def train(config):
                     action_mask=action_mask,
                     embodiment_ids=embodiment_ids,
                     hidden_states=hidden_states,
+                    planner_fused_tokens=planner_fused_tokens,
+                    planner_state=planner_states,
+                    plan_token_mask=plan_token_mask,
                 )
                 
             target_velocity = (actions_gt - noise).view(actions_gt.shape[0], -1)
@@ -757,7 +842,12 @@ def train(config):
                 loss = loss + bridge_aux_loss
                 extra_metrics.update(bridge_metrics)
                 extra_metrics["bridge_aux_loss"] = float(bridge_aux_loss.detach().cpu().item())
-            coarse_planner_loss, coarse_planner_metrics = compute_coarse_planner_loss(model, batch, config)
+            coarse_planner_loss, coarse_planner_metrics = compute_coarse_planner_loss(
+                model,
+                batch,
+                config,
+                segment_autoencoder=segment_autoencoder,
+            )
             if coarse_planner_loss is not None:
                 loss = loss + coarse_planner_loss
                 extra_metrics.update(coarse_planner_metrics)

@@ -81,16 +81,17 @@ def build_cache_from_simulation_dataset(
     feature_config = config["feature"]
     simulation_config = config["simulation"]
 
-    coarse_action_config = {
+    action_segment_config = {
         "enabled": True,
         "num_plan_steps": int(target_config["num_plan_steps"]),
         "planning_horizon": int(target_config["planning_horizon"]),
+        "execution_horizon": int(target_config.get("execution_horizon", simulation_config.get("action_horizon") or 16)),
+        "suffix_stride_tokens": target_config.get("suffix_stride_tokens"),
         "action_dim": int(dataset_config["max_action_dim"]),
-        "action_convention": str(target_config.get("action_convention", "relative")),
-        "motion_indices": target_config.get("motion_indices"),
-        "gripper_indices": target_config.get("gripper_indices"),
     }
-    action_horizon = simulation_config.get("action_horizon") or int(target_config["planning_horizon"])
+    action_horizon = simulation_config.get("action_horizon") or int(
+        target_config.get("execution_horizon", target_config["planning_horizon"])
+    )
     dataset = SimulationDataset(
         dataset_config,
         image_size=int(feature_config.get("image_size", 448)),
@@ -99,7 +100,7 @@ def build_cache_from_simulation_dataset(
         video_backend_kwargs=simulation_config.get("video_backend_kwargs", {}),
         action_horizon=int(action_horizon),
         cache_dir=simulation_config.get("cache_dir"),
-        coarse_action_config=coarse_action_config,
+        action_segment_config=action_segment_config,
     )
     if len(dataset) == 0:
         raise ValueError("SimulationDataset produced no samples")
@@ -128,19 +129,23 @@ def build_cache_from_simulation_dataset(
 
     for index in range(max_samples):
         sample = dataset[index]
+        planner_images = sample.get("planner_images", sample["images"])
+        planner_image_mask = sample.get("planner_image_mask", sample["image_mask"])
+        planner_prompt = sample.get("planner_prompt", sample.get("prompt", ""))
+        planner_state = sample.get("planner_state", sample["state"])
         with torch.no_grad():
             tokens = extract_planner_tokens(
                 embedder,
-                sample["images"],
-                sample["image_mask"],
-                sample.get("prompt", ""),
+                planner_images,
+                planner_image_mask,
+                planner_prompt,
                 feature_config,
             )
         record = {
             "vlm_tokens": tokens.detach().cpu(),
-            "state": sample["state"].detach().cpu().float(),
-            "coarse_actions": sample["coarse_actions"].detach().cpu().float(),
-            "coarse_action_mask": sample["coarse_action_mask"].detach().cpu().float(),
+            "state": planner_state.detach().cpu().float(),
+            "action_segments": sample["action_segments"].detach().cpu().float(),
+            "action_segment_mask": sample["action_segment_mask"].detach().cpu().float(),
             "episode_id": str(sample.get("episode_id", f"sample_{index}")),
             "frame_index": int(sample.get("frame_index", index)),
             "source_path": "SimulationDataset",
@@ -166,6 +171,7 @@ def build_cache_from_simulation_dataset(
     manifest = {
         "format": "planner_feature_cache",
         "version": 1,
+        "supervision": "action_segment_latent",
         "num_samples": samples_written,
         "split_counts": split_counts,
         "target": target_config,
@@ -230,8 +236,8 @@ def flush_planner_shard(
     payload = {
         "vlm_tokens": torch.stack([sample["vlm_tokens"].to(dtype=dtype) for sample in samples], dim=0),
         "state": torch.stack([sample["state"] for sample in samples], dim=0),
-        "coarse_actions": torch.stack([sample["coarse_actions"] for sample in samples], dim=0),
-        "coarse_action_mask": torch.stack([sample["coarse_action_mask"] for sample in samples], dim=0),
+        "action_segments": torch.stack([sample["action_segments"] for sample in samples], dim=0),
+        "action_segment_mask": torch.stack([sample["action_segment_mask"] for sample in samples], dim=0),
         "episode_id": [sample["episode_id"] for sample in samples],
         "frame_index": torch.tensor([sample["frame_index"] for sample in samples], dtype=torch.long),
         "source_path": [sample["source_path"] for sample in samples],

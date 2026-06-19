@@ -31,8 +31,8 @@ def test_build_planner_feature_cache_and_dataset(tmp_path):
     sample = train_dataset[0]
     assert tuple(sample["vlm_tokens"].shape) == (3, 4)
     assert tuple(sample["state"].shape) == (2,)
-    assert tuple(sample["coarse_actions"].shape) == (2, 3)
-    assert tuple(sample["coarse_action_mask"].shape) == (2,)
+    assert tuple(sample["action_segments"].shape) == (2, 2, 3)
+    assert tuple(sample["action_segment_mask"].shape) == (2,)
 
 
 def test_standalone_model_config_uses_dataset_shapes(tmp_path):
@@ -56,13 +56,13 @@ def test_standalone_model_config_uses_dataset_shapes(tmp_path):
     )
 
     train_dataset, _ = build_datasets(config)
-    model_config = resolve_model_config(config, train_dataset.sample_shapes)
+    model_config = resolve_model_config(config, train_dataset.sample_shapes, latent_dim=5)
 
     assert model_config.hidden_dim == 4
     assert model_config.state_dim == 2
-    assert model_config.action_dim == 3
+    assert model_config.latent_dim == 5
     assert model_config.num_plan_steps == 2
-    assert model_config.num_layers == 3
+    assert model_config.num_layers == 4
 
 
 def test_standalone_evaluate_runs_on_synthetic_cache(tmp_path):
@@ -89,12 +89,94 @@ def test_standalone_evaluate_runs_on_synthetic_cache(tmp_path):
         num_tokens=3,
     )
     train_dataset, _ = build_datasets(config)
-    model = CoarsePlanner(resolve_model_config(config, train_dataset.sample_shapes))
+    model = CoarsePlanner(resolve_model_config(config, train_dataset.sample_shapes, latent_dim=5))
+    segment_autoencoder = _FakeSegmentAutoencoder(latent_dim=5)
 
-    metrics = evaluate_planner(model, DataLoader(train_dataset, batch_size=2), config, device="cpu")
+    metrics = evaluate_planner(model, segment_autoencoder, DataLoader(train_dataset, batch_size=2), config, device="cpu")
 
     assert metrics["loss"] >= 0.0
-    assert metrics["mae"] >= 0.0
+    assert metrics["latent_mse"] >= 0.0
+    assert metrics["normalized_latent_mse"] >= 0.0
+    assert metrics["raw_latent_mse"] >= 0.0
+    assert metrics["decoded_chunk_loss"] >= 0.0
+    assert -1.0 <= metrics["latent_cosine_similarity"] <= 1.0
+
+
+def test_standalone_evaluate_accepts_latent_normalizer(tmp_path):
+    from torch.utils.data import DataLoader
+
+    from coarse_planner.config import load_config
+    from coarse_planner.data import build_synthetic_feature_cache, build_datasets
+    from coarse_planner.evaluate import evaluate_planner
+    from coarse_planner.latent_normalization import LatentNormalizer
+    from coarse_planner.train import resolve_model_config
+    from himem_bridge_vla.model.planner import CoarsePlanner
+
+    config = load_config(None)
+    config["data"].update({"root": str(tmp_path / "cache"), "include_tail": False, "val_fraction": 0.5})
+    config["target"].update({"num_plan_steps": 2, "planning_horizon": 4})
+    config["model"].update({"num_heads": 2})
+    build_synthetic_feature_cache(
+        config,
+        tmp_path / "cache",
+        num_episodes=2,
+        episode_length=6,
+        hidden_dim=4,
+        state_dim=2,
+        action_dim=3,
+        num_tokens=3,
+    )
+    train_dataset, _ = build_datasets(config)
+    model = CoarsePlanner(resolve_model_config(config, train_dataset.sample_shapes, latent_dim=5))
+    segment_autoencoder = _FakeSegmentAutoencoder(latent_dim=5)
+    normalizer = LatentNormalizer(mean=torch.ones(5), std=torch.full((5,), 2.0), count=8)
+
+    metrics = evaluate_planner(
+        model,
+        segment_autoencoder,
+        DataLoader(train_dataset, batch_size=2),
+        config,
+        device="cpu",
+        latent_normalizer=normalizer,
+    )
+
+    assert metrics["normalized_latent_mse"] != metrics["raw_latent_mse"]
+    assert "normalized_latent_mse_u0" in metrics
+
+
+def test_convert_raw_latent_head_preserves_unnormalized_output():
+    from coarse_planner.latent_normalization import LatentNormalizer
+    from coarse_planner.train import _convert_raw_latent_head_to_normalized_output
+    from himem_bridge_vla.model.planner import CoarsePlanner, CoarsePlannerConfig
+
+    model = CoarsePlanner(
+        CoarsePlannerConfig(
+            hidden_dim=4,
+            state_dim=2,
+            latent_dim=3,
+            num_plan_steps=2,
+            planning_horizon=4,
+            num_layers=3,
+            num_heads=2,
+            dropout=0.0,
+        )
+    )
+    model.eval()
+    vlm_tokens = torch.randn(2, 3, 4)
+    state = torch.randn(2, 2)
+    normalizer = LatentNormalizer(
+        mean=torch.tensor([0.5, -0.25, 1.0]),
+        std=torch.tensor([2.0, 0.5, 4.0]),
+        count=16,
+    )
+
+    with torch.no_grad():
+        raw_before = model(vlm_tokens, state).predicted_latents.clone()
+        _convert_raw_latent_head_to_normalized_output(model, normalizer)
+        normalized_after = model(vlm_tokens, state).predicted_latents
+        raw_after = normalizer.unnormalize(normalized_after)
+
+    assert torch.allclose(raw_after, raw_before, atol=1.0e-5)
 
 
 def test_simulation_source_validation_reports_missing_videos(tmp_path):
@@ -142,3 +224,15 @@ def _episode(episode_id):
         "actions": torch.ones(8, 3),
         "frame_index": torch.arange(8),
     }
+
+
+class _FakeSegmentAutoencoder(torch.nn.Module):
+    def __init__(self, *, latent_dim):
+        super().__init__()
+        self.latent_dim = latent_dim
+
+    def encode(self, action_segments):
+        return action_segments.new_zeros((*action_segments.shape[:2], self.latent_dim))
+
+    def decode(self, latents):
+        return latents.new_zeros((*latents.shape[:2], 2, 3))
