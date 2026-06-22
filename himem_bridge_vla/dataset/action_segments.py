@@ -15,36 +15,6 @@ def token_span_steps(*, planning_horizon: int, num_plan_steps: int) -> int:
     return planning_horizon // num_plan_steps
 
 
-def plan_consumption_from_steps(executed_steps: int, *, span_steps: int) -> tuple[int, int]:
-    if span_steps <= 0:
-        raise ValueError(f"span_steps must be positive, got {span_steps}")
-    steps = max(0, int(executed_steps))
-    return steps // span_steps, steps % span_steps
-
-
-def build_plan_active_mask(*, num_plan_steps: int, consumed_tokens: int) -> np.ndarray:
-    if num_plan_steps <= 0:
-        raise ValueError(f"num_plan_steps must be positive, got {num_plan_steps}")
-    consumed = max(0, min(int(consumed_tokens), int(num_plan_steps)))
-    mask = np.zeros((num_plan_steps,), dtype=bool)
-    mask[consumed:] = True
-    return mask
-
-
-def plan_suffix_token_offsets(
-    *,
-    num_plan_steps: int,
-    planning_horizon: int,
-    execution_horizon: int,
-    suffix_stride_tokens: int | None = None,
-) -> list[int]:
-    span = token_span_steps(planning_horizon=planning_horizon, num_plan_steps=num_plan_steps)
-    if suffix_stride_tokens is None:
-        suffix_stride_tokens = execution_horizon // span if execution_horizon % span == 0 else 1
-    stride = max(1, int(suffix_stride_tokens))
-    return list(range(0, num_plan_steps, stride))
-
-
 def build_action_segment_target(
     actions: Any,
     *,

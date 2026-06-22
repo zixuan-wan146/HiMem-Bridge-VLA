@@ -24,7 +24,6 @@ himem_bridge_vla/
   model/                   可训练模型模块，只消费已经解析好的 config
 
 evaluations/libero/         LIBERO client、action 协议、result summary
-transition_trigger/         独立 transition-trigger 训练、评估、runtime、selected config
 coarse_planner/             独立 Coarse Planner warm-up 数据、训练、评估、checkpoint export
 scripts/                   train/server/repo gate、preflight、下载、评估编排、报告工具
 tests/                     轻量单测，不下载模型权重
@@ -88,10 +87,9 @@ python scripts/train.py \
 - `model/planner`：只实现 Coarse Planner，不读取 memory。
 - `coarse_planner/`：只实现 standalone warm-up、planner feature cache、评估和导出，不复制模型结构。
 - `model/himem_bridge_vla.py`：只负责把 VLM、bridge、memory、action head 连接起来。
-- `dataset/action_segments.py`：只实现 future action segment 切分、segment mask、plan suffix mask 和执行步数到 token 消费的换算。
-- `transition_trigger/`：只实现独立 trigger 训练、评估、runtime policy 和 selected config，不直接依赖 LIBERO。
-- `evaluations/libero/`：只实现 LIBERO 环境交互、transition-frame 适配、trace/result 记录，不训练 trigger。
-- `scripts/himem_server.py`：只把模型服务、server protocol 和可选 transition trigger manager 连接起来。
+- `dataset/action_segments.py`：只实现 future action segment 切分和 segment mask；当前 H32 single-token 路径不再维护 suffix consumption 状态。
+- `evaluations/libero/`：只实现 LIBERO 环境交互、action 协议和 result 记录。
+- `scripts/himem_server.py`：只把模型服务和 server protocol 连接起来；当前路径不再加载 transition trigger。
 - `scripts/train.py`：只负责训练流程、日志、checkpoint，不新增模型结构。
 
 这几个边界以后要尽量守住。否则最容易回到“参数散在脚本里、模型里、YAML 里各一份”的状态。

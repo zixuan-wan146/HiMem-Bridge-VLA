@@ -2,21 +2,21 @@ seed: 42
 
 data:
   format: planner_feature_cache
-  root: /root/autodl-tmp/datasets/coarse_planner/libero_h64
+  root: ../datasets/coarse_planner/libero_h32_single_token_s32768_seed42
   manifest: manifest.json
-  shard_cache_size: 8
+  shard_cache_size: 32
   max_samples_per_shard: 256
   val_fraction: 0.1
   split_by: episode
 
 target:
-  planning_horizon: 64
-  num_plan_steps: 8
-  chunk_size: 8
+  planning_horizon: 32
+  num_plan_steps: 1
+  chunk_size: 32
   gripper_indices: [6]
 
 segment_autoencoder:
-  checkpoint: /root/autodl-tmp/runs/coarse_planner/libero_h64_segment_ae_v2/best.pt
+  checkpoint: ../runs/coarse_planner/libero_h32_intent_ae_v1/best.pt
   latent_dim: 128
   hidden_dim: 128
   num_layers: 2
@@ -25,7 +25,7 @@ segment_autoencoder:
   dropout: 0.05
   gripper_dim: 1
   distance_loss_weight: 0.1
-  dct_low_frequency: 4
+  dct_low_frequency: 8
   endpoint_distance_weight: 0.5
   gripper_distance_weight: 0.25
 
@@ -45,33 +45,30 @@ latent_normalization:
   reuse_existing_stats: true
   std_floor: 0.0001
 
-initialization:
-  resume_from: /root/autodl-tmp/runs/coarse_planner/libero_h64_planner_v2/best.pt
-  convert_raw_latent_head: true
-  reset_optimizer: true
-  reset_best: true
-
 training:
   batch_size: 640
-  epochs: 105
-  lr: 0.00003
+  epochs: 100
+  lr: 0.0001
   weight_decay: 0.0001
   num_workers: 0
+  shuffle_mode: shard
   grad_clip_norm: 1.0
   amp: true
+  save_best_metric: val_raw_latent_mse
+  save_best_mode: min
+  early_stopping_patience: 0
+  early_stopping_min_delta: 0.00001
 
 loss:
   gripper_indices: [6]
   gripper_loss_weight: 2.0
   latent_loss_weight: 1.0
-  chunk_loss_weight: 1.0
+  chunk_loss_weight: 0.25
   loss_on_active_suffix_only: false
 
 evaluation:
-  holdout_root: /root/autodl-tmp/datasets/coarse_planner/libero_h64_holdout_seed43
-  consumed_tokens_set: [0, 2, 4, 6]
+  consumed_tokens_set: [0]
 
 outputs:
-  run_dir: /root/autodl-tmp/runs/coarse_planner/libero_h64_planner_znorm_chunk1_v4
-  segment_ae_run_dir: /root/autodl-tmp/runs/coarse_planner/libero_h64_segment_ae_v2
-
+  run_dir: ../runs/coarse_planner/libero_h32_single_token_planner_v1
+  segment_ae_run_dir: ../runs/coarse_planner/libero_h32_intent_ae_v1

@@ -85,13 +85,9 @@ def build_cache_from_simulation_dataset(
         "enabled": True,
         "num_plan_steps": int(target_config["num_plan_steps"]),
         "planning_horizon": int(target_config["planning_horizon"]),
-        "execution_horizon": int(target_config.get("execution_horizon", simulation_config.get("action_horizon") or 16)),
-        "suffix_stride_tokens": target_config.get("suffix_stride_tokens"),
         "action_dim": int(dataset_config["max_action_dim"]),
     }
-    action_horizon = simulation_config.get("action_horizon") or int(
-        target_config.get("execution_horizon", target_config["planning_horizon"])
-    )
+    action_horizon = simulation_config.get("action_horizon") or int(target_config["planning_horizon"])
     dataset = SimulationDataset(
         dataset_config,
         image_size=int(feature_config.get("image_size", 448)),

@@ -124,10 +124,6 @@ def test_custom_collate_includes_action_segment_targets():
         "planner_state": torch.zeros(2),
         "action_segments": torch.zeros(3, 4, 2),
         "action_segment_mask": torch.tensor([True, True, False]),
-        "plan_active_mask": torch.tensor([False, True, True]),
-        "plan_consumed_steps": torch.tensor(4),
-        "plan_consumed_tokens": torch.tensor(1),
-        "plan_residual_steps": torch.tensor(0),
     }
 
     batch = train_script.custom_collate_fn([item, item])
@@ -135,7 +131,7 @@ def test_custom_collate_includes_action_segment_targets():
     assert tuple(batch["action_segments"].shape) == (2, 3, 4, 2)
     assert tuple(batch["action_segment_mask"].shape) == (2, 3)
     assert tuple(batch["planner_states"].shape) == (2, 2)
-    assert tuple(batch["plan_active_mask"].shape) == (2, 3)
+    assert "plan_active_mask" not in batch
 
 
 def test_compute_coarse_planner_loss_uses_cached_model_output():
@@ -179,8 +175,6 @@ def test_build_action_segment_dataset_config_maps_planner_fields():
             "coarse_planner_num_plan_steps": 4,
             "coarse_planner_planning_horizon": 16,
             "coarse_planner_action_dim": 7,
-            "coarse_planner_execution_horizon": 8,
-            "coarse_planner_suffix_stride_tokens": 2,
         }
     )
 
@@ -189,8 +183,6 @@ def test_build_action_segment_dataset_config_maps_planner_fields():
         "num_plan_steps": 4,
         "planning_horizon": 16,
         "action_dim": 7,
-        "execution_horizon": 8,
-        "suffix_stride_tokens": 2,
     }
 
 

@@ -27,7 +27,7 @@ After disk cleanup, only the datasets needed to reproduce the current planner
 state and continue the next stage were retained.
 
 ```text
-/root/autodl-tmp/datasets/coarse_planner/libero_h64
+$AUTODL_TMP/datasets/coarse_planner/libero_h64
 ```
 
 Small original LIBERO H64 cache, 2048 samples. It is kept because early AE and
@@ -35,7 +35,7 @@ planner baselines were measured on it, and it is small enough that keeping it is
 cheap.
 
 ```text
-/root/autodl-tmp/datasets/coarse_planner/libero_h64_holdout_seed43
+$AUTODL_TMP/datasets/coarse_planner/libero_h64_holdout_seed43
 ```
 
 Independent seed43 holdout cache, 2048 samples. This is the most important
@@ -43,7 +43,7 @@ evaluation set because the final reported generalization metrics are measured on
 it. Removing it would make fair comparison with v17 impossible.
 
 ```text
-/root/autodl-tmp/datasets/coarse_planner/libero_h64_s32768_seed42
+$AUTODL_TMP/datasets/coarse_planner/libero_h64_s32768_seed42
 ```
 
 Current useful large training cache, 32768 samples. The effective v11-v17
@@ -64,7 +64,13 @@ H32/H48/smoke/probe caches: not needed for the current H64 planner path
 The current standalone planner checkpoint is:
 
 ```text
-/root/autodl-tmp/runs/coarse_planner/libero_h64_planner_znorm_interp_v17_alpha075/best.pt
+$AUTODL_TMP/runs/coarse_planner/libero_h64_planner_znorm_interp_v17_alpha075/best.pt
+```
+
+Use this cleaned active config for evaluation or continuation:
+
+```text
+coarse_planner/configs/libero_h64_planner_znorm_v17.yaml
 ```
 
 It was produced by checkpoint interpolation:
@@ -187,20 +193,20 @@ v12.
 The frozen Action Segment Autoencoder was evaluated on the retained 32k cache:
 
 ```text
-/root/autodl-tmp/datasets/coarse_planner/libero_h64_s32768_seed42
+$AUTODL_TMP/datasets/coarse_planner/libero_h64_s32768_seed42
 ```
 
 Checkpoint:
 
 ```text
-/root/autodl-tmp/runs/coarse_planner/libero_h64_segment_ae_v2/best.pt
+$AUTODL_TMP/runs/coarse_planner/libero_h64_segment_ae_v2/best.pt
 ```
 
 Evaluation output:
 
 ```text
-/root/autodl-tmp/runs/coarse_planner/libero_h64_segment_ae_v2/eval_libero_h64_s32768_seed42.json
-/root/autodl-tmp/runs/coarse_planner/libero_h64_segment_ae_v2/eval_libero_h64_s32768_seed42.md
+$AUTODL_TMP/runs/coarse_planner/libero_h64_segment_ae_v2/eval_libero_h64_s32768_seed42.json
+$AUTODL_TMP/runs/coarse_planner/libero_h64_segment_ae_v2/eval_libero_h64_s32768_seed42.md
 ```
 
 Results:

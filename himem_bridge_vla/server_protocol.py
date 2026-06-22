@@ -59,18 +59,6 @@ def validate_inference_request(
     robot_key = data.get("robot_key")
     if robot_key is not None and not isinstance(robot_key, str):
         robot_key = str(robot_key)
-    transition_dataset_name = data.get("transition_dataset_name")
-    if transition_dataset_name is not None and not isinstance(transition_dataset_name, str):
-        transition_dataset_name = str(transition_dataset_name)
-    transition_frame_index = data.get("transition_frame_index")
-    if transition_frame_index is not None:
-        transition_frame_index = int(transition_frame_index)
-    executed_control_steps = data.get("executed_control_steps")
-    if executed_control_steps is not None:
-        executed_control_steps = _non_negative_int(executed_control_steps, "executed_control_steps")
-    requested_execute_steps = data.get("requested_execute_steps")
-    if requested_execute_steps is not None:
-        requested_execute_steps = _positive_int(requested_execute_steps, "requested_execute_steps")
 
     return {
         "image": images,
@@ -82,12 +70,6 @@ def validate_inference_request(
         "session_id": session_id,
         "robot_key": robot_key,
         "reset_memory": bool(data.get("reset_memory", False)),
-        "reset_transition_trigger": bool(data.get("reset_transition_trigger", data.get("reset_memory", False))),
-        "transition_dataset_name": transition_dataset_name,
-        "transition_frame": _validate_transition_frame(data.get("transition_frame")),
-        "transition_frame_index": transition_frame_index,
-        "executed_control_steps": executed_control_steps,
-        "requested_execute_steps": requested_execute_steps,
         "return_debug": bool(data.get("return_debug", False)),
     }
 
@@ -149,25 +131,6 @@ def _positive_int_or_default(value: Any, default: int) -> int:
     return parsed if parsed > 0 else default
 
 
-def _positive_int(value: Any, field_name: str) -> int:
-    parsed = _non_negative_int(value, field_name)
-    if parsed <= 0:
-        raise ValueError(f"{field_name} must be positive, got {value!r}")
-    return parsed
-
-
-def _non_negative_int(value: Any, field_name: str) -> int:
-    if isinstance(value, bool):
-        raise ValueError(f"{field_name} must be an integer, got {value!r}")
-    try:
-        parsed = int(value)
-    except (TypeError, ValueError) as exc:
-        raise ValueError(f"{field_name} must be an integer, got {value!r}") from exc
-    if parsed < 0:
-        raise ValueError(f"{field_name} must be non-negative, got {value!r}")
-    return parsed
-
-
 def _coerce_binary_mask(mask: Any, field_name: str) -> np.ndarray:
     try:
         flat_mask = np.asarray(mask, dtype=np.int32).reshape(-1)
@@ -221,26 +184,3 @@ def _validate_state(state: Any, *, target_state_dim: int) -> list[float]:
     if not np.isfinite(flat_state).all():
         raise ValueError("state must contain only finite values")
     return [float(value) for value in flat_state.tolist()]
-
-
-def _validate_transition_frame(frame: Any) -> dict[str, Any] | None:
-    if frame is None:
-        return None
-    if not isinstance(frame, Mapping):
-        raise ValueError("transition_frame must be a JSON object")
-    validated: dict[str, Any] = {}
-    for key, value in frame.items():
-        field = str(key)
-        try:
-            array = np.asarray(value, dtype=np.float32).reshape(-1)
-        except (TypeError, ValueError) as exc:
-            raise ValueError(f"transition_frame.{field} must be numeric") from exc
-        if array.size == 0:
-            raise ValueError(f"transition_frame.{field} must not be empty")
-        if not np.isfinite(array).all():
-            raise ValueError(f"transition_frame.{field} must contain only finite values")
-        if array.size == 1:
-            validated[field] = float(array[0])
-        else:
-            validated[field] = [float(item) for item in array.tolist()]
-    return validated

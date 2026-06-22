@@ -2,7 +2,7 @@ seed: 42
 
 data:
   format: planner_feature_cache
-  root: /root/autodl-tmp/datasets/coarse_planner/default
+  root: ../datasets/coarse_planner/default
   manifest: manifest.json
   input_paths: []
   stride: 1
@@ -12,10 +12,8 @@ data:
   split_by: episode
 
 target:
-  num_plan_steps: 8
-  planning_horizon: 64
-  execution_horizon: 16
-  suffix_stride_tokens: 2
+  num_plan_steps: 1
+  planning_horizon: 32
   gripper_indices: [-1]
 
 segment_autoencoder:
@@ -59,5 +57,5 @@ loss:
   loss_on_active_suffix_only: false
 
 outputs:
-  run_dir: /root/autodl-tmp/runs/coarse_planner/default
-  segment_ae_run_dir: /root/autodl-tmp/runs/coarse_planner/default_segment_ae
+  run_dir: ../runs/coarse_planner/default
+  segment_ae_run_dir: ../runs/coarse_planner/default_segment_ae

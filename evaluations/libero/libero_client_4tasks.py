@@ -12,18 +12,11 @@ import imageio
 import random
 
 from libero_action_protocol import (
-    parse_action_response_with_metadata,
-    select_actions_for_transition_policy,
+    parse_action_response,
     to_libero_action,
 )
 from libero_client_config import LiberoClientConfig, configure_mujoco_environment
 from libero_eval_summary import EpisodeResult, write_result_summary
-from libero_transition_frame import build_libero_transition_frame
-from libero_transition_trace import (
-    append_transition_trace,
-    build_transition_error_trace_record,
-    build_transition_trace_record,
-)
 
 args = LiberoClientConfig.from_env()
 configure_mujoco_environment(args)
@@ -70,12 +63,6 @@ def obs_to_json_dict(
     *,
     episode_id: str | None = None,
     session_id: str | None = None,
-    reset_transition_trigger: bool = False,
-    transition_dataset_name: str | None = None,
-    previous_action=None,
-    transition_frame_index: int | None = None,
-    executed_control_steps: int | None = None,
-    requested_execute_steps: int | None = None,
 ):
     img = np.ascontiguousarray(obs["agentview_image"][::-1, ::-1])
     wrist_img = np.ascontiguousarray(obs["robot0_eye_in_hand_image"][::-1, ::-1])
@@ -100,22 +87,6 @@ def obs_to_json_dict(
         data["episode_id"] = episode_id
     if session_id is not None:
         data["session_id"] = session_id
-    if executed_control_steps is not None:
-        data["executed_control_steps"] = int(executed_control_steps)
-    if requested_execute_steps is not None:
-        data["requested_execute_steps"] = int(requested_execute_steps)
-    if transition_dataset_name is not None:
-        data["transition_dataset_name"] = transition_dataset_name
-        data["reset_transition_trigger"] = bool(reset_transition_trigger)
-        data["return_debug"] = True
-        if previous_action is not None:
-            data["transition_frame"] = build_libero_transition_frame(
-                obs,
-                previous_action,
-                dataset_name=transition_dataset_name,
-            )
-            if transition_frame_index is not None:
-                data["transition_frame_index"] = int(transition_frame_index)
     return data
 
 # ========= Get the environment of LIBERO =========
@@ -204,88 +175,29 @@ async def run(SERVER_URL: str, max_steps: int = None, num_episodes: int = None, 
                     decision_steps = 0
                     control_steps = 0
                     frames = []
-                    previous_transition_action = None
                     episode_key = f"{task_suite_name}:task{task_id}:episode{ep}"
-                    last_executed_control_steps = None
 
                     for step in range(max_steps):
                         decision_steps += 1
-                        reset_transition_trigger = step == 0
-                        transition_frame_index = control_steps if previous_transition_action is not None else None
 
                         send_data = obs_to_json_dict(
                             obs,
                             prompt,
-                            episode_id=episode_key if args.transition_dataset_name else None,
-                            session_id=args.ckpt_name if args.transition_dataset_name else None,
-                            reset_transition_trigger=reset_transition_trigger,
-                            transition_dataset_name=args.transition_dataset_name,
-                            previous_action=previous_transition_action,
-                            transition_frame_index=transition_frame_index,
-                            executed_control_steps=last_executed_control_steps,
-                            requested_execute_steps=horizon,
+                            episode_id=episode_key,
+                            session_id=args.ckpt_name,
                         )
                         await ws.send(json.dumps(send_data))
                         log.debug(f"[Step {step}] Send observation")
 
                         result = await ws.recv()
                         try:
-                            parsed_response = parse_action_response_with_metadata(result, horizon=horizon)
-                            actions = select_actions_for_transition_policy(
-                                parsed_response.actions,
-                                parsed_response.transition_trigger,
-                                replan_action_limit=args.transition_replan_action_limit,
-                            )
-                            append_transition_trace(
-                                args.transition_trace_file,
-                                build_transition_trace_record(
-                                    task_suite=task_suite_name,
-                                    task_id=task_id,
-                                    episode_id=ep,
-                                    episode_key=episode_key,
-                                    task_description=prompt,
-                                    decision_step=step,
-                                    control_step_before=control_steps,
-                                    transition_frame_index=transition_frame_index,
-                                    reset_transition_trigger=reset_transition_trigger,
-                                    has_transition_frame="transition_frame" in send_data,
-                                    transition_trigger=parsed_response.transition_trigger,
-                                    raw_action_chunk_len=len(parsed_response.actions),
-                                    executed_action_chunk_len=len(actions),
-                                    replan_action_limit=args.transition_replan_action_limit,
-                                ),
-                            )
-                            if parsed_response.transition_trigger is not None:
-                                log.debug(f"[Step {step}] transition_trigger={parsed_response.transition_trigger}")
-                                if len(actions) < len(parsed_response.actions):
-                                    log.debug(
-                                        f"[Step {step}] transition replan shortened action chunk "
-                                        f"{len(parsed_response.actions)} -> {len(actions)}"
-                                    )
+                            actions = parse_action_response(result, horizon=horizon)
                             log.debug(f"[Step {step}] received actions (gripper={actions[0][6]})")
                         except Exception as e:
                             failure_reason = f"action_parse_error: {e}"
-                            append_transition_trace(
-                                args.transition_trace_file,
-                                build_transition_error_trace_record(
-                                    task_suite=task_suite_name,
-                                    task_id=task_id,
-                                    episode_id=ep,
-                                    episode_key=episode_key,
-                                    task_description=prompt,
-                                    decision_step=step,
-                                    control_step_before=control_steps,
-                                    transition_frame_index=transition_frame_index,
-                                    reset_transition_trigger=reset_transition_trigger,
-                                    has_transition_frame="transition_frame" in send_data,
-                                    error=e,
-                                    response_preview=result,
-                                ),
-                            )
                             log.error(f"Action parsing failed: {e}, content: {result}")
                             break
 
-                        executed_this_chunk = 0
                         for action_values in actions:
                             action = to_libero_action(action_values)
                             log.debug(action[:7])
@@ -293,9 +205,6 @@ async def run(SERVER_URL: str, max_steps: int = None, num_episodes: int = None, 
                             try:
                                 obs, reward, done, info = env.step(action)
                                 control_steps += 1
-                                executed_this_chunk += 1
-                                if args.transition_dataset_name:
-                                    previous_transition_action = action
                             except ValueError as ve:
                                 failure_reason = f"invalid_action: {ve}"
                                 log.error(f"Action is not valid: {ve}")
@@ -316,7 +225,6 @@ async def run(SERVER_URL: str, max_steps: int = None, num_episodes: int = None, 
                                 total_success += 1
                                 total_success_decision_steps += decision_steps
                                 break
-                        last_executed_control_steps = executed_this_chunk
                         if episode_done or episode_failed:
                             break
 

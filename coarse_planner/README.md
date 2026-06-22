@@ -1,52 +1,51 @@
 # Standalone Coarse Planner
 
-This module trains the Coarse Planner before it is attached to the full HiMem-Bridge-VLA model.
+This package is the standalone training/evaluation path for the Coarse Planner
+before it is attached to the full HiMem-Bridge-VLA training loop.
 
-The intended pipeline is:
+The active LIBERO path is H32 single-token intent planning:
 
 ```text
-cache InternVL3/VLA tokens per frame
-build planner feature cache
-train action-segment autoencoder
-train CoarsePlanner only
-inspect latent loss and decoded segment quality
-export checkpoint
-load checkpoint into HiMemBridgeVLA and finetune Bridge/ActionHead
+cache VLM tokens and robot state
+build one 32-step action-intent target per sample
+train the action-only intent autoencoder
+freeze AE
+train CoarsePlanner to predict one AE latent from one plan token
+evaluate latent MSE, decoded chunk quality, and cosine similarity
+use the single plan token at inference/integration time
 ```
 
-The planner still does not read memory. It only consumes:
+The old compressed coarse-action target and the H64 multi-token/suffix queue path
+are deprecated and should not be used for new experiments.
+
+## Current Active Artifacts
+
+Datasets on the remote data disk:
 
 ```text
-vlm_tokens: [L, D]
-state:      [state_dim]
+../datasets/coarse_planner/libero_h32_single_token_s32768_seed42
 ```
 
-and predicts:
+Checkpoints/runs:
 
 ```text
-plan_tokens:        [K, D]
-predicted_latents:  [K, latent_dim]
+../runs/coarse_planner/libero_h32_intent_ae_v1
+../runs/coarse_planner/libero_h32_single_token_planner_v1
+```
+
+## Active Configs
+
+Use these configs for the current LIBERO H32 single-token path:
+
+```text
+coarse_planner/configs/libero_h32_single_token_build.yaml
+coarse_planner/configs/libero_h32_intent_ae_v1.yaml
+coarse_planner/configs/libero_h32_single_token_planner_v1.yaml
 ```
 
 ## Feature Cache Format
 
-Raw input sources for `build_dataset.py` are `.pt` or `.npz` files containing either one episode dict or:
-
-```python
-{
-    "episodes": [
-        {
-            "episode_id": "task/episode_000",
-            "vlm_tokens": ...,  # [T, L, D]
-            "states": ...,      # [T, state_dim]
-            "actions": ...,     # [T, action_dim]
-            "frame_index": ..., # optional [T]
-        },
-    ],
-}
-```
-
-The builder writes sharded planner samples:
+The planner feature cache is sharded:
 
 ```text
 manifest.json
@@ -54,115 +53,85 @@ train/planner_samples_00000.pt
 eval/planner_samples_00001.pt
 ```
 
-Each sample contains `vlm_tokens`, `state`, `action_segments`, and `action_segment_mask`.
-
-## Smoke Dataset
-
-Use the synthetic path only to verify the data/training pipeline:
-
-```bash
-python -m coarse_planner.build_dataset \
-  --config coarse_planner/configs/synthetic_smoke.yaml \
-  --synthetic-smoke \
-  --output /root/autodl-tmp/datasets/coarse_planner/smoke
-```
-
-## From SimulationDataset
-
-For real demonstrations, first export the exact token source the planner will see in the main model:
-
-```bash
-python -m coarse_planner.build_from_simulation \
-  --config coarse_planner/configs/calvin_abc_d_smoke.yaml \
-  --dry-run
-```
-
-Then build a small feature cache:
-
-```bash
-python -m coarse_planner.build_from_simulation \
-  --config coarse_planner/configs/calvin_abc_d_smoke.yaml \
-  --device cuda \
-  --max-samples 128
-```
-
-The default token source is `feature.source=fused`, matching the main training path that calls InternVL3 with `return_cls_only=False`.
-For layer ablations, set:
-
-```yaml
-feature:
-  source: hidden_state
-  hidden_state_layer: deep
-```
-
-State is stored separately in the cache and fused by `CoarsePlanner` through its state projection token. Do not pre-concatenate raw state into `vlm_tokens`.
-
-## LIBERO Historical Ablation
-
-The LIBERO planner warm-up path uses the Evo-1 style InternVL3-1B embedder:
+Each sample contains:
 
 ```text
-OpenGVLab/InternVL3-1B
-language_model.layers[:14]
-return_cls_only = false
+vlm_tokens
+state
+action_segments
+action_segment_mask
 ```
 
-The cached `vlm_tokens` are the 14-layer VLM fused tokens for observation and language only. LIBERO proprioception is built as:
+For LIBERO H32 single-token planning, the important target contract is:
 
 ```text
-state_raw = [obs/ee_states(6), obs/gripper_states(2)]
-state = minmax_normalize(state_raw, Evo1_LIBERO/norm_stats.json)
-state = pad_to_24(state)
+planning_horizon: 32
+num_plan_steps: 1
+chunk_size: 32
+gripper_indices: [6]
 ```
 
-The old horizon ablation kept the chunk size fixed at 8 control steps:
+## Common Commands
 
-```text
-H=32, K=4
-H=48, K=6
-H=64, K=8
-```
-
-All three caches reused the same sampled `(task, demo, timestep)` manifest. That experiment used the rejected compressed coarse-action target and should not be used for new training claims.
-
-Dry-run the cache plan:
+Build the 32k LIBERO H32 cache:
 
 ```bash
 python -m coarse_planner.build_from_libero \
-  --config coarse_planner/configs/libero_horizon_ablation_build.yaml \
-  --dry-run
-```
-
-Build all three feature caches in one InternVL pass:
-
-```bash
-python -m coarse_planner.build_from_libero \
-  --config coarse_planner/configs/libero_horizon_ablation_build.yaml \
+  --config coarse_planner/configs/libero_h32_single_token_build.yaml \
   --device cuda
 ```
 
-Run the full H32/H48/H64 standalone training and report:
+Train the H32 intent AE:
 
 ```bash
-COARSE_PLANNER_BATCH_SIZE=512 \
-COARSE_PLANNER_EPOCHS=8 \
-scripts/run_coarse_planner_libero_ablation.sh
+python -m coarse_planner.train_segment_autoencoder \
+  --config coarse_planner/configs/libero_h32_intent_ae_v1.yaml \
+  --device cuda
 ```
 
-The train logs include `cuda_peak_reserved_gb`; adjust `COARSE_PLANNER_BATCH_SIZE` so the 4090 run reserves about 20 GB without OOM.
-
-## Training
+Train the H32 single-token planner:
 
 ```bash
 python -m coarse_planner.train \
-  --config coarse_planner/configs/default.yaml \
-  --run-dir /root/autodl-tmp/runs/coarse_planner/libero_warmup
+  --config coarse_planner/configs/libero_h32_single_token_planner_v1.yaml \
+  --device cuda
 ```
 
-## Export
+## Current Metrics
 
-```bash
-python -m coarse_planner.export \
-  --checkpoint /root/autodl-tmp/runs/coarse_planner/libero_warmup/best.pt \
-  --output /root/autodl-tmp/checkpoints/coarse_planner/libero_warmup.pt
+```text
+H32 intent AE:
+  best epoch:     99
+  val_loss:       0.0137875769
+  val_rec_loss:   0.0123513332
+  val_dist_loss:  0.0143624358
+
+H32 single-token planner:
+  training stopped at the 2026-06-22 04:45 wall-clock deadline
+  checkpoint selection metric: val_raw_latent_mse
+  best epoch:     52
+  best raw MSE:   0.0869378231
+  best val loss:  0.2716650516
+  best cosine:    0.9047680597
+  last epoch:     60
+  last raw MSE:   0.0878419157
+```
+
+## Notes
+
+Detailed design and experiment records live in:
+
+```text
+docs/coarse_planner_design.md
+docs/action_segment_autoencoder_coarse_planner_config.md
+docs/current_project_state.md
+```
+
+The next training stage is not more standalone planner fine-tuning by default.
+BridgeAttention / ActionHead joint training is deferred until the memory rewrite
+direction is settled.
+
+```text
+P_t = f_plan(H_t, s_t)       # shape [B, 1, D]
+ActionHead(H_t, s_t, P_t)    # predicts a 32-step action chunk
 ```

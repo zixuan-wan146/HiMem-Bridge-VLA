@@ -3,9 +3,6 @@ import pytest
 
 from himem_bridge_vla.dataset.action_segments import (
     build_action_segment_target,
-    build_plan_active_mask,
-    plan_consumption_from_steps,
-    plan_suffix_token_offsets,
     token_span_steps,
 )
 
@@ -39,25 +36,12 @@ def test_action_segment_target_rejects_nondivisible_horizon():
         build_action_segment_target(np.ones((5, 3), dtype=np.float32), num_plan_steps=2, planning_horizon=5)
 
 
-def test_plan_consumption_uses_cumulative_steps():
-    span = token_span_steps(planning_horizon=64, num_plan_steps=8)
+def test_single_token_target_can_cover_full_intent_chunk():
+    actions = np.arange(32 * 3, dtype=np.float32).reshape(32, 3)
 
-    assert span == 8
-    assert plan_consumption_from_steps(4, span_steps=span) == (0, 4)
-    assert plan_consumption_from_steps(8, span_steps=span) == (1, 0)
+    segments, mask = build_action_segment_target(actions, num_plan_steps=1, planning_horizon=32)
 
-
-def test_plan_active_mask_keeps_suffix_from_consumed_token():
-    mask = build_plan_active_mask(num_plan_steps=8, consumed_tokens=2)
-
-    np.testing.assert_array_equal(mask, np.array([False, False, True, True, True, True, True, True]))
-
-
-def test_plan_suffix_offsets_follow_execution_horizon():
-    offsets = plan_suffix_token_offsets(
-        num_plan_steps=8,
-        planning_horizon=64,
-        execution_horizon=16,
-    )
-
-    assert offsets == [0, 2, 4, 6]
+    assert token_span_steps(planning_horizon=32, num_plan_steps=1) == 32
+    assert segments.shape == (1, 32, 3)
+    np.testing.assert_allclose(segments[0], actions)
+    np.testing.assert_array_equal(mask, np.array([True]))

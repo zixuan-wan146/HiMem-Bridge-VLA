@@ -33,10 +33,8 @@ class LiberoEpisode:
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(
-        description="Build LIBERO CoarsePlanner feature caches for one or more horizon ablations."
-    )
-    parser.add_argument("--config", default="coarse_planner/configs/libero_horizon_ablation_build.yaml")
+    parser = argparse.ArgumentParser(description="Build LIBERO CoarsePlanner feature caches.")
+    parser.add_argument("--config", default="coarse_planner/configs/libero_h32_single_token_build.yaml")
     parser.add_argument("--output", default=None, help="Override base output root. Multi-horizon builds append _h{H}.")
     parser.add_argument("--sample-index", default=None, help="Override libero.sample_index_path.")
     parser.add_argument("--device", default="cuda")

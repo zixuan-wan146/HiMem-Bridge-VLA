@@ -55,55 +55,7 @@ def test_validate_inference_request_accepts_optional_memory_fields():
     assert request["session_id"] == "client-a"
     assert request["robot_key"] == "libero"
     assert request["reset_memory"] is True
-    assert request["reset_transition_trigger"] is True
     assert request["return_debug"] is True
-
-
-def test_validate_inference_request_accepts_plan_queue_feedback():
-    payload = valid_request()
-    payload["executed_control_steps"] = 4
-    payload["requested_execute_steps"] = 16
-
-    request = validate_inference_request(payload, target_state_dim=6)
-
-    assert request["executed_control_steps"] == 4
-    assert request["requested_execute_steps"] == 16
-
-
-def test_validate_inference_request_rejects_negative_plan_queue_feedback():
-    payload = valid_request()
-    payload["executed_control_steps"] = -1
-
-    with pytest.raises(ValueError, match="executed_control_steps"):
-        validate_inference_request(payload, target_state_dim=6)
-
-
-def test_validate_inference_request_accepts_transition_frame():
-    payload = valid_request()
-    payload["episode_id"] = "episode-a"
-    payload["transition_dataset_name"] = "robomme_four_tasks"
-    payload["transition_frame_index"] = 17
-    payload["transition_frame"] = {
-        "action": [0.0] * 7,
-        "eef_state": [0.1] * 7,
-        "joint_state": [0.2] * 7,
-        "gripper_state": [0.3, 0.4],
-    }
-
-    request = validate_inference_request(payload, target_state_dim=6)
-
-    assert request["transition_dataset_name"] == "robomme_four_tasks"
-    assert request["transition_frame_index"] == 17
-    assert request["transition_frame"]["action"] == pytest.approx([0.0] * 7)
-    assert request["transition_frame"]["gripper_state"] == pytest.approx([0.3, 0.4])
-
-
-def test_validate_inference_request_rejects_bad_transition_frame():
-    payload = valid_request()
-    payload["transition_frame"] = {"action": [0.0, float("nan")]}
-
-    with pytest.raises(ValueError, match="transition_frame.action"):
-        validate_inference_request(payload, target_state_dim=6)
 
 
 def test_validate_inference_request_accepts_zero_padded_action_mask_for_smaller_model_dim():

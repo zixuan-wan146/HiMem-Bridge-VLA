@@ -18,13 +18,7 @@ import pickle
 
 from himem_bridge_vla.dataset.cache_utils import dataset_cache_namespace
 from himem_bridge_vla.dataset.cache_utils import default_dataset_cache_dir
-from himem_bridge_vla.dataset.action_segments import (
-    build_action_segment_target,
-    build_plan_active_mask,
-    plan_consumption_from_steps,
-    plan_suffix_token_offsets,
-    token_span_steps,
-)
+from himem_bridge_vla.dataset.action_segments import build_action_segment_target
 from himem_bridge_vla.utils.normalization import minmax_normalize
 
 
@@ -206,27 +200,7 @@ def _process_parquet_file_worker(args):
         segments_enabled = bool((action_segment_config or {}).get("enabled", False))
         planning_horizon = int((action_segment_config or {}).get("planning_horizon", action_horizon))
         num_plan_steps = int((action_segment_config or {}).get("num_plan_steps", 1))
-        execution_horizon = int((action_segment_config or {}).get("execution_horizon", action_horizon))
-        suffix_stride_tokens = (action_segment_config or {}).get("suffix_stride_tokens")
-        if suffix_stride_tokens is not None:
-            suffix_stride_tokens = int(suffix_stride_tokens)
-        if segments_enabled:
-            span_steps = token_span_steps(planning_horizon=planning_horizon, num_plan_steps=num_plan_steps)
-            suffix_offsets = plan_suffix_token_offsets(
-                num_plan_steps=num_plan_steps,
-                planning_horizon=planning_horizon,
-                execution_horizon=execution_horizon,
-                suffix_stride_tokens=suffix_stride_tokens,
-            )
-        else:
-            span_steps = 1
-            suffix_offsets = [0]
-        max_consumed_steps = max(suffix_offsets) * span_steps
-        max_future_horizon = max(
-            action_horizon,
-            planning_horizon if segments_enabled else action_horizon,
-            max_consumed_steps + action_horizon,
-        )
+        max_future_horizon = max(action_horizon, planning_horizon if segments_enabled else action_horizon)
         real_row_count = len(df)
         if max_samples_per_file is not None:
             df = df.head(max_samples_per_file)
@@ -266,78 +240,57 @@ def _process_parquet_file_worker(args):
 
         episode_files = []
         for anchor_idx in range(real_row_count):
-            for consumed_tokens in suffix_offsets:
-                consumed_steps = int(consumed_tokens) * span_steps
-                current_idx = anchor_idx + consumed_steps
-                if current_idx >= real_row_count:
-                    continue
-                start_idx = current_idx
-                end_idx = current_idx + action_horizon
+            start_idx = anchor_idx
+            end_idx = start_idx + action_horizon
 
-                cache_subdir = cache_dir / cache_namespace / arm_name / dataset_name / parquet_path.parent.name / parquet_path.stem
-                cache_filename = f"{anchor_idx}_{start_idx}_{end_idx}_u{int(consumed_tokens)}.pkl"
-                cache_filepath = cache_subdir / cache_filename
+            cache_subdir = cache_dir / cache_namespace / arm_name / dataset_name / parquet_path.parent.name / parquet_path.stem
+            cache_filename = f"{anchor_idx}_{start_idx}_{end_idx}.pkl"
+            cache_filepath = cache_subdir / cache_filename
 
-                if cache_filepath.exists():
-                    episode_files.append(str(cache_filepath))
-                    continue
-
-                logging.info(f"build {cache_filename}")
-                sub_df = df.iloc[start_idx: end_idx]
-                first_row = sub_df.iloc[0]
-                planner_row = df.iloc[anchor_idx]
-                metadata = adapter.sample_metadata(first_row, parquet_path, start_idx)
-                planner_metadata = adapter.sample_metadata(planner_row, parquet_path, anchor_idx)
-
-                prompt = adapter.prompt(first_row, task_mapping, metadata)
-                if not prompt:
-                    task_index = first_row.get("task_index", None)
-                    logging.info(f"cannot find task description from task_index={task_index}")
-                planner_prompt = adapter.prompt(planner_row, task_mapping, planner_metadata) or prompt
-
-                episode = {
-                    "arm_key": arm_name,
-                    "dataset_key": dataset_name,
-                    "prompt": prompt,
-                    "state": adapter.state(first_row),
-                    "action": [adapter.action(row) for _, row in sub_df.iterrows()],
-                    "video_paths": video_paths,
-                    "timestamp": adapter.timestamp(first_row, start_idx),
-                    "planner_prompt": planner_prompt,
-                    "planner_state": adapter.state(planner_row),
-                    "planner_timestamp": adapter.timestamp(planner_row, anchor_idx),
-                    "plan_consumed_steps": consumed_steps,
-                    "plan_consumed_tokens": int(consumed_tokens),
-                    "plan_residual_steps": 0,
-                    **metadata,
-                }
-                if segments_enabled:
-                    consumed_token_count, residual_steps = plan_consumption_from_steps(
-                        consumed_steps,
-                        span_steps=span_steps,
-                    )
-                    future_df = df.iloc[anchor_idx: anchor_idx + planning_horizon]
-                    future_actions = [adapter.action(row) for _, row in future_df.iterrows()]
-                    action_segments, action_segment_mask = build_action_segment_target(
-                        future_actions,
-                        num_plan_steps=num_plan_steps,
-                        planning_horizon=planning_horizon,
-                        valid_action_count=max(0, real_row_count - anchor_idx),
-                    )
-                    episode["action_segments"] = action_segments
-                    episode["action_segment_mask"] = action_segment_mask
-                    episode["plan_consumed_tokens"] = int(consumed_token_count)
-                    episode["plan_residual_steps"] = int(residual_steps)
-                    episode["plan_active_mask"] = build_plan_active_mask(
-                        num_plan_steps=num_plan_steps,
-                        consumed_tokens=consumed_token_count,
-                    )
-
-                cache_subdir.mkdir(parents=True, exist_ok=True)
-                with open(cache_filepath, 'wb') as f:
-                    pickle.dump(episode, f)
-
+            if cache_filepath.exists():
                 episode_files.append(str(cache_filepath))
+                continue
+
+            logging.info(f"build {cache_filename}")
+            sub_df = df.iloc[start_idx: end_idx]
+            first_row = sub_df.iloc[0]
+            metadata = adapter.sample_metadata(first_row, parquet_path, start_idx)
+
+            prompt = adapter.prompt(first_row, task_mapping, metadata)
+            if not prompt:
+                task_index = first_row.get("task_index", None)
+                logging.info(f"cannot find task description from task_index={task_index}")
+
+            episode = {
+                "arm_key": arm_name,
+                "dataset_key": dataset_name,
+                "prompt": prompt,
+                "state": adapter.state(first_row),
+                "action": [adapter.action(row) for _, row in sub_df.iterrows()],
+                "video_paths": video_paths,
+                "timestamp": adapter.timestamp(first_row, start_idx),
+                "planner_prompt": prompt,
+                "planner_state": adapter.state(first_row),
+                "planner_timestamp": adapter.timestamp(first_row, start_idx),
+                **metadata,
+            }
+            if segments_enabled:
+                future_df = df.iloc[anchor_idx: anchor_idx + planning_horizon]
+                future_actions = [adapter.action(row) for _, row in future_df.iterrows()]
+                action_segments, action_segment_mask = build_action_segment_target(
+                    future_actions,
+                    num_plan_steps=num_plan_steps,
+                    planning_horizon=planning_horizon,
+                    valid_action_count=max(0, real_row_count - anchor_idx),
+                )
+                episode["action_segments"] = action_segments
+                episode["action_segment_mask"] = action_segment_mask
+
+            cache_subdir.mkdir(parents=True, exist_ok=True)
+            with open(cache_filepath, 'wb') as f:
+                pickle.dump(episode, f)
+
+            episode_files.append(str(cache_filepath))
         return episode_files, None 
         
     except Exception as e:
@@ -739,11 +692,6 @@ class SimulationDataset(Dataset):
             action_segments_padded, _ = self._pad_tensor(action_segments, self.action_segment_dim)
             sample["action_segments"] = action_segments_padded.to(dtype=torch.bfloat16)
             sample["action_segment_mask"] = torch.as_tensor(item["action_segment_mask"], dtype=torch.bool)
-        if "plan_active_mask" in item:
-            sample["plan_active_mask"] = torch.as_tensor(item["plan_active_mask"], dtype=torch.bool)
-        for plan_key in ("plan_consumed_steps", "plan_consumed_tokens", "plan_residual_steps"):
-            if plan_key in item:
-                sample[plan_key] = torch.tensor(int(item[plan_key]), dtype=torch.long)
         if "boundary" in item:
             sample["boundary"] = torch.tensor(float(item["boundary"]), dtype=torch.float32)
         if "progress" in item:

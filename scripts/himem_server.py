@@ -26,7 +26,6 @@ from himem_bridge_vla.runtime_config import (
 from himem_bridge_vla.image_preprocessing import rgb_array_to_pil
 from himem_bridge_vla.server_protocol import checkpoint_normalizer_dim, validate_inference_request
 from himem_bridge_vla.model.himem_bridge_vla import HiMemBridgeVLA
-from himem_bridge_vla.transition_trigger_manager import ServerTransitionTriggerManager
 from himem_bridge_vla.utils.normalization import NormalizationStats
 
 
@@ -111,7 +110,7 @@ def pad_state_tensor(state: torch.Tensor, target_dim: int = TARGET_STATE_DIM) ->
     return state
 
 
-def infer_from_json_dict(data: dict, model, normalizer, transition_manager: ServerTransitionTriggerManager | None = None):
+def infer_from_json_dict(data: dict, model, normalizer):
     device = next(model.parameters()).device
     model_state_dim = int(model.config.get("state_dim", TARGET_STATE_DIM))
     model_action_dim = int(getattr(model, "per_action_dim", model.config.get("per_action_dim", TARGET_STATE_DIM)))
@@ -121,11 +120,6 @@ def infer_from_json_dict(data: dict, model, normalizer, transition_manager: Serv
         target_action_dim=model_action_dim,
         max_action_mask_dim=TARGET_STATE_DIM,
     )
-    transition_result, memory_write_gate = update_transition_trigger(request, transition_manager)
-    coarse_plan_refresh = bool(request["reset_transition_trigger"])
-    if transition_result is not None:
-        coarse_plan_refresh = coarse_plan_refresh or bool(transition_result.should_plan)
-
     images = [decode_image_from_list(img, device) for img in request["image"]]
     for img in images:
         expected_shape = (3, IMAGE_SIZE, IMAGE_SIZE)
@@ -158,10 +152,6 @@ def infer_from_json_dict(data: dict, model, normalizer, transition_manager: Serv
             episode_id=request["episode_id"],
             session_id=request["session_id"],
             reset_memory=request["reset_memory"],
-            memory_write_gate=memory_write_gate,
-            coarse_plan_refresh=coarse_plan_refresh,
-            executed_control_steps=request["executed_control_steps"],
-            requested_execute_steps=request["requested_execute_steps"],
         )
         if action.numel() % model_action_dim != 0:
             raise ValueError(f"Model returned {action.numel()} action values, not divisible by per_action_dim={model_action_dim}")
@@ -170,50 +160,17 @@ def infer_from_json_dict(data: dict, model, normalizer, transition_manager: Serv
         actions = action.cpu().numpy().tolist()
         if not request["return_debug"]:
             return actions
-        response = {"actions": actions}
-        if transition_result is not None:
-            response["transition_trigger"] = transition_result.to_dict()
-        return response
+        return {"actions": actions}
 
 
-def update_transition_trigger(
-    request: dict,
-    transition_manager: ServerTransitionTriggerManager | None,
-):
-    if transition_manager is None:
-        return None, None
-
-    episode_key = transition_episode_key(request["episode_id"], request["session_id"])
-    if request["transition_frame"] is None:
-        if request["reset_transition_trigger"] and episode_key:
-            transition_manager.reset(episode_key)
-        return None, None
-
-    result = transition_manager.update(
-        episode_key=episode_key,
-        dataset_name=request["transition_dataset_name"],
-        frame=request["transition_frame"],
-        frame_index=request["transition_frame_index"],
-        reset=request["reset_transition_trigger"],
-    )
-    memory_write_gate = 1.0 if result.memory_write else 0.0
-    return result, memory_write_gate
-
-
-def transition_episode_key(episode_id: str | None, session_id: str | None) -> str | None:
-    if episode_id and session_id:
-        return f"{session_id}:{episode_id}"
-    return episode_id or session_id
-
-
-async def handle_request(websocket, model, normalizer, transition_manager: ServerTransitionTriggerManager | None = None):
+async def handle_request(websocket, model, normalizer):
     logging.info("Client connected")
     try:
         async for message in websocket:
             try:
                 json_data = json.loads(message)
                 logging.info("Received JSON observation")
-                actions = infer_from_json_dict(json_data, model, normalizer, transition_manager=transition_manager)
+                actions = infer_from_json_dict(json_data, model, normalizer)
                 await websocket.send(json.dumps(actions))
                 logging.info("Sent action chunk")
             except Exception as exc:
@@ -235,21 +192,6 @@ def parse_args():
         action="store_true",
         help="Allow torch.load(weights_only=False) fallback for trusted local DeepSpeed checkpoints.",
     )
-    parser.add_argument(
-        "--transition_trigger_package",
-        default=None,
-        help="Optional selected transition_trigger package directory for memory-write/replan decisions.",
-    )
-    parser.add_argument(
-        "--transition_dataset_name",
-        default=None,
-        help="Default transition_trigger dataset schema, e.g. robomme_four_tasks or rmbench_9tasks.",
-    )
-    parser.add_argument(
-        "--transition_device",
-        default=None,
-        help="Device for the transition trigger; defaults to --device.",
-    )
     return parser.parse_args()
 
 
@@ -264,25 +206,10 @@ if __name__ == "__main__":
         inference_steps=args.inference_steps,
         allow_unsafe_checkpoint_load=args.allow_unsafe_checkpoint_load,
     )
-    transition_manager = None
-    if args.transition_trigger_package:
-        transition_device = args.transition_device or args.device
-        transition_manager = ServerTransitionTriggerManager.from_package(
-            args.transition_trigger_package,
-            device=transition_device,
-            default_dataset_name=args.transition_dataset_name,
-        )
-        logging.info(
-            "Loaded transition trigger package=%s dataset=%s device=%s",
-            args.transition_trigger_package,
-            args.transition_dataset_name,
-            transition_device,
-        )
-
     async def main():
         logging.info(f"HiMem-Bridge-VLA server running at ws://{args.host}:{args.port}")
         async with websockets.serve(
-            lambda ws: handle_request(ws, model, normalizer, transition_manager=transition_manager),
+            lambda ws: handle_request(ws, model, normalizer),
             args.host,
             args.port,
             max_size=DEFAULT_MAX_MESSAGE_SIZE,

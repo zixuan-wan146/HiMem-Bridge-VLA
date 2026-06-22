@@ -3,15 +3,19 @@ from __future__ import annotations
 from collections import OrderedDict
 from dataclasses import dataclass
 import json
+import math
 from pathlib import Path
 import random
 from typing import Any
 
 import numpy as np
 import torch
-from torch.utils.data import Dataset
+from torch.utils.data import Dataset, Sampler
 
 from himem_bridge_vla.dataset.action_segments import build_action_segment_target
+
+_FEATURE_FIELDS = frozenset(("vlm_tokens", "state", "action_segments", "action_segment_mask"))
+_METADATA_FIELDS = frozenset(("frame_index", "episode_id", "source_path", "task_suite", "task_description"))
 
 
 @dataclass(frozen=True)
@@ -31,8 +35,10 @@ class PlannerFeatureDataset(Dataset):
         split: str = "train",
         manifest: str | Path = "manifest.json",
         shard_cache_size: int = 8,
+        fields: tuple[str, ...] | list[str] | None = None,
     ) -> None:
         self.root = Path(root).expanduser()
+        self.fields = _normalize_fields(fields)
         manifest_path = Path(manifest)
         if not manifest_path.is_absolute():
             manifest_path = self.root / manifest_path
@@ -69,14 +75,19 @@ class PlannerFeatureDataset(Dataset):
     def __getitem__(self, index: int) -> dict[str, Any]:
         shard_index, row = self.index[index]
         shard = self._load_shard(shard_index)
-        item = {
-            "vlm_tokens": shard["vlm_tokens"][row].float(),
-            "state": shard["state"][row].float(),
-            "frame_index": int(shard["frame_index"][row]),
-            "episode_id": str(shard["episode_id"][row]),
-        }
-        item["action_segments"] = shard["action_segments"][row].float()
-        item["action_segment_mask"] = shard["action_segment_mask"][row].float()
+        item = {}
+        if "vlm_tokens" in self.fields:
+            item["vlm_tokens"] = shard["vlm_tokens"][row].float()
+        if "state" in self.fields:
+            item["state"] = shard["state"][row].float()
+        if "action_segments" in self.fields:
+            item["action_segments"] = shard["action_segments"][row].float()
+        if "action_segment_mask" in self.fields:
+            item["action_segment_mask"] = shard["action_segment_mask"][row].float()
+        if "frame_index" in shard:
+            item["frame_index"] = int(shard["frame_index"][row])
+        if "episode_id" in shard:
+            item["episode_id"] = str(shard["episode_id"][row])
         if "source_path" in shard:
             item["source_path"] = str(shard["source_path"][row])
         if "task_suite" in shard:
@@ -91,6 +102,8 @@ class PlannerFeatureDataset(Dataset):
             self._cached_shards[shard_index] = shard
             return shard
         shard = torch.load(self.shards[shard_index].path, map_location="cpu", weights_only=False)
+        keep_fields = set(self.fields) | set(_METADATA_FIELDS)
+        shard = {key: value for key, value in shard.items() if key in keep_fields}
         self._cached_shards[shard_index] = shard
         while len(self._cached_shards) > self._max_cached_shards:
             self._cached_shards.popitem(last=False)
@@ -99,12 +112,57 @@ class PlannerFeatureDataset(Dataset):
     @property
     def sample_shapes(self) -> dict[str, tuple[int, ...]]:
         sample = self[0]
-        return {
-            "vlm_tokens": tuple(sample["vlm_tokens"].shape),
-            "state": tuple(sample["state"].shape),
-            "action_segments": tuple(sample["action_segments"].shape),
-            "action_segment_mask": tuple(sample["action_segment_mask"].shape),
-        }
+        return {key: tuple(sample[key].shape) for key in self.fields if key in sample}
+
+
+class ShardBatchSampler(Sampler[list[int]]):
+    """Batch sampler that shuffles while keeping planner shard reads local."""
+
+    def __init__(
+        self,
+        dataset: PlannerFeatureDataset,
+        *,
+        batch_size: int,
+        shuffle: bool = True,
+        drop_last: bool = False,
+        seed: int = 42,
+    ) -> None:
+        if batch_size <= 0:
+            raise ValueError(f"batch_size must be positive, got {batch_size}")
+        self.dataset = dataset
+        self.batch_size = int(batch_size)
+        self.shuffle = bool(shuffle)
+        self.drop_last = bool(drop_last)
+        self.seed = int(seed)
+        self.epoch = 0
+        self._indices_by_shard: list[list[int]] = [[] for _ in dataset.shards]
+        for dataset_index, (shard_index, _) in enumerate(dataset.index):
+            self._indices_by_shard[shard_index].append(dataset_index)
+
+    def __iter__(self):
+        rng = random.Random(self.seed + self.epoch)
+        self.epoch += 1
+        shard_order = list(range(len(self._indices_by_shard)))
+        if self.shuffle:
+            rng.shuffle(shard_order)
+
+        batch: list[int] = []
+        for shard_index in shard_order:
+            indices = list(self._indices_by_shard[shard_index])
+            if self.shuffle:
+                rng.shuffle(indices)
+            for index in indices:
+                batch.append(index)
+                if len(batch) == self.batch_size:
+                    yield batch
+                    batch = []
+        if batch and not self.drop_last:
+            yield batch
+
+    def __len__(self) -> int:
+        if self.drop_last:
+            return len(self.dataset) // self.batch_size
+        return math.ceil(len(self.dataset) / self.batch_size)
 
 
 def build_datasets(config: dict[str, Any]) -> tuple[PlannerFeatureDataset, PlannerFeatureDataset]:
@@ -114,19 +172,34 @@ def build_datasets(config: dict[str, Any]) -> tuple[PlannerFeatureDataset, Plann
     root = data_config["root"]
     manifest = data_config.get("manifest", "manifest.json")
     shard_cache_size = int(data_config.get("shard_cache_size", 8))
+    fields = data_config.get("fields")
     train_dataset = PlannerFeatureDataset(
         root,
         split=str(data_config.get("train_split", "train")),
         manifest=manifest,
         shard_cache_size=shard_cache_size,
+        fields=fields,
     )
     eval_dataset = PlannerFeatureDataset(
         root,
         split=str(data_config.get("eval_split", "eval")),
         manifest=manifest,
         shard_cache_size=shard_cache_size,
+        fields=fields,
     )
     return train_dataset, eval_dataset
+
+
+def _normalize_fields(fields: tuple[str, ...] | list[str] | None) -> frozenset[str]:
+    if fields is None:
+        return _FEATURE_FIELDS
+    requested = frozenset(str(field) for field in fields)
+    unknown = requested - _FEATURE_FIELDS
+    if unknown:
+        raise ValueError(f"unknown planner feature fields: {sorted(unknown)}")
+    if not requested:
+        raise ValueError("planner feature fields must not be empty")
+    return requested
 
 
 def build_planner_feature_cache(config: dict[str, Any], output_root: str | Path | None = None) -> dict[str, Any]:

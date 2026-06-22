@@ -11,7 +11,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "seed": 42,
     "data": {
         "format": "planner_feature_cache",
-        "root": "/root/autodl-tmp/datasets/coarse_planner/default",
+        "root": "../datasets/coarse_planner/default",
         "manifest": "manifest.json",
         "input_paths": [],
         "vlm_token_key": "vlm_tokens",
@@ -42,13 +42,11 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "max_samples_per_file": None,
         "video_backend": "av",
         "video_backend_kwargs": {},
-        "cache_dir": "/root/autodl-tmp/cache/himem_bridge_vla/simulation",
+        "cache_dir": "../cache/himem_bridge_vla/simulation",
     },
     "target": {
-        "num_plan_steps": 8,
-        "planning_horizon": 64,
-        "execution_horizon": 16,
-        "suffix_stride_tokens": 2,
+        "num_plan_steps": 1,
+        "planning_horizon": 32,
         "gripper_indices": [-1],
     },
     "segment_autoencoder": {

@@ -24,7 +24,7 @@ from himem_bridge_vla.model.planner import CoarsePlanner, CoarsePlannerConfig, a
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Diagnose CoarsePlanner latent prediction errors.")
-    parser.add_argument("--config", default="coarse_planner/configs/libero_h64_planner_znorm_chunk1_v4.yaml")
+    parser.add_argument("--config", default="coarse_planner/configs/libero_h64_planner_znorm_v17.yaml")
     parser.add_argument("--checkpoint", default=None, help="Planner checkpoint. Defaults to outputs.run_dir/best.pt.")
     parser.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
     parser.add_argument("--batch-size", type=int, default=256)

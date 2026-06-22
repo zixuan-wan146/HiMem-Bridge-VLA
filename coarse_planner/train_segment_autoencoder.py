@@ -75,6 +75,9 @@ def main() -> int:
     history = []
     start_epoch = 1
     history_path = run_dir / "train_history.json"
+    patience = int(config["training"].get("early_stopping_patience", 0) or 0)
+    min_delta = float(config["training"].get("early_stopping_min_delta", 0.0))
+    epochs_without_improvement = 0
     if args.resume_from:
         checkpoint = torch.load(Path(args.resume_from).expanduser(), map_location=args.device)
         model.load_state_dict(checkpoint["segment_autoencoder_state_dict"])
@@ -132,6 +135,13 @@ def main() -> int:
         }
         history.append(summary)
         print(json.dumps(summary, sort_keys=True))
+        current_best_value = float(val_metrics["loss"])
+        improved = current_best_value < best_loss - min_delta
+        if improved:
+            best_loss = current_best_value
+            epochs_without_improvement = 0
+        else:
+            epochs_without_improvement += 1
         checkpoint = {
             "epoch": epoch,
             "best_loss": best_loss,
@@ -142,10 +152,23 @@ def main() -> int:
             "optimizer_state_dict": optimizer.state_dict(),
         }
         torch.save(checkpoint, run_dir / "last.pt")
-        if val_metrics["loss"] < best_loss:
-            best_loss = float(val_metrics["loss"])
-            checkpoint["best_loss"] = best_loss
+        if improved:
             torch.save(checkpoint, run_dir / "best.pt")
+        (run_dir / "train_history.json").write_text(json.dumps(history, indent=2))
+        if patience > 0 and epochs_without_improvement >= patience:
+            print(
+                json.dumps(
+                    {
+                        "event": "early_stop",
+                        "epoch": epoch,
+                        "best_loss": best_loss,
+                        "patience": patience,
+                        "min_delta": min_delta,
+                    },
+                    sort_keys=True,
+                )
+            )
+            break
 
     (run_dir / "train_history.json").write_text(json.dumps(history, indent=2))
     return 0

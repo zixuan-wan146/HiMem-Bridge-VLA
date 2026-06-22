@@ -1,239 +1,135 @@
 # Coarse Planner Design
 
-Date: 2026-06-18
+Date: 2026-06-22
 
-Status: refactoring from compressed coarse-action supervision to action-segment intent
-latents. Do not start training until the action-segment autoencoder architecture and
-training recipe are explicitly approved.
-
-Concrete first-version module parameters are tracked in:
-
-```text
-docs/action_segment_autoencoder_coarse_planner_config.md
-```
+Status: H32 single-token intent planning.
 
 ## Core Decision
 
-The Coarse Planner still predicts coarse plan tokens:
+The active planner no longer predicts a cached multi-token suffix. It predicts
+one plan token at every inference step:
 
 ```text
-P_tau = CoarsePlanner(H_tau_vlm, s_tau)
-P_tau: [B, K, D]
+P_t = CoarsePlanner(H_t_vlm, s_t)
+P_t: [B, 1, D]
 ```
 
-Those tokens are the only planner signal used by the inference backbone:
+The single token represents the intent for the next 32 low-level action steps.
+Every inference recomputes it from the current observation.
+
+This removes the previous failure mode where a long cached plan could remain in
+force after the world state had drifted. The closed-loop mechanism is now
+frequent replanning, not transition-triggered hard refresh.
+
+## Removed Semantics
+
+The active H32 path does not use:
 
 ```text
-H_t_bridge = BridgeAttention(H_t_vlm, s_t, P_active, M_t)
-ActionHead(H_t_bridge, s_t)
+PlanTokenQueue
+cached plan suffixes
+consumed-token offsets
+execution-horizon refresh policy
+transition-trigger refresh decisions
+H64 multi-token targets
 ```
 
-The old compressed coarse-action target is removed. The planner is no longer trained
-to predict hand-built chunk summaries such as motion sums or terminal gripper values.
-That target collapses distinct action segments into identical labels.
+Transition trigger is deleted from the active server/eval/test path. It should
+not be retrained for this design unless the planning horizon is lengthened again
+and a concrete closed-loop failure case requires it.
 
-The new target is an action-segment intent latent:
+## Action Intent Target
+
+The planner target is still defined by an action-only autoencoder. For each
+sample:
 
 ```text
-z_i* = E_phi(A_i)
-z_hat_i = W_z p_i
+A_t: [32, action_dim]
+z_t* = E_phi(A_t)
 ```
 
-`E_phi`, `D_theta`, and `W_z` are training-time shaping tools. Inference uses only
-`P_active`.
+The autoencoder is action-only. It must not use VLM tokens, language tokens,
+state, or memory. Its role is to define a latent space for 32-step action
+chunks.
 
-## Action-Segment Autoencoder
-
-Future actions are split into `K` full segments:
+The active H32 target contract is:
 
 ```text
-A_tau: [H_p, action_dim]
-A_tau -> [A_0, ..., A_{K-1}]
-A_i: [c, action_dim]
-c = H_p / K
+planning_horizon: 32
+num_plan_steps: 1
+chunk_size: 32
+action_segments: [B, 1, 32, action_dim]
+action_segment_mask: [B, 1]
 ```
 
-The action-segment autoencoder is action-only:
+## Planner Objective
+
+The planner receives current VLM tokens and robot state:
 
 ```text
-z_i* = E_phi(A_i)
-A_hat_i = D_theta(z_i*)
+P_t = f_plan(H_t_vlm, s_t)
+z_hat_t = W_z P_t
 ```
 
-It must not use `s_t`, VLM tokens, memory tokens, language tokens, or any other state
-condition. Its job is to define the latent geometry of action segments themselves.
-
-The intended training objective is:
+Training uses the frozen autoencoder for supervision:
 
 ```text
-L_AE = L_rec + lambda_dist * L_dist
-```
-
-`L_rec` reconstructs the full segment, with a motion reconstruction term and a
-separate gripper term. `L_dist` keeps latent distances aligned with action-segment
-distances, for example from low-frequency trajectory shape, endpoint displacement,
-and gripper change.
-
-After AE training:
-
-```text
-freeze(E_phi, D_theta)
-```
-
-Main-model training then uses the frozen encoder and decoder for supervision only.
-
-## Planner Intent Loss
-
-The planner still receives current VLM tokens and proprioception at an anchor time
-`tau`:
-
-```text
-P_tau = f_plan(H_tau_vlm, s_tau)
-z_hat_tau_i = W_z P_tau_i
-z_tau_i* = E_phi(A_tau_i)
-```
-
-The auxiliary planner objective is:
-
-```text
-L_z = sum_i mask_i * ||z_hat_tau_i - z_tau_i*||_2^2
-A_hat_tau_i = D_theta(z_hat_tau_i)
-L_chunk = sum_i mask_i * rec(A_hat_tau_i, A_tau_i)
+L_z = ||z_hat_t - z_t*||_2^2
+A_hat_t = D_theta(z_hat_t)
+L_chunk = rec(A_hat_t, A_t)
 L_planner = lambda_z * L_z + lambda_A * L_chunk
 ```
 
-The full training loss is:
+The latent head and frozen decoder are training-time shaping tools. Inference
+uses only the plan token.
+
+## Inference Contract
+
+The intended integration contract is:
 
 ```text
-L = L_flow + L_bridge_aux + lambda_cp * L_planner
+P_t = f_plan(H_t_vlm, s_t)       # [B, 1, D]
+H_t_bridge = BridgeAttention(H_t_vlm, s_t, P_t, M_t)
+ActionHead(H_t_bridge, s_t)      # predicts a 32-step action chunk
 ```
 
-The latent head and frozen decoder are not part of the inference path.
+There is no plan cache key and no requested/consumed control-step bookkeeping in
+the H32 planner path.
 
-## Plan Token Queue
+## Data And Training Notes
 
-Inference maintains a per-session plan cache:
+The full feature cache stores VLM tokens, state, and action targets. The AE
+training path uses a derived action-only cache to avoid loading VLM features:
 
 ```text
-C = (P_tau, N)
+libero_h32_single_token_s32768_seed42
+libero_h32_single_token_s32768_seed42_action_only
 ```
 
-`N` is the cumulative number of low-level control steps executed from this cached
-plan. Token consumption is derived from `N`, not from call count:
+Planner training uses shard-local batching:
 
 ```text
-u = floor(N / c)
-r = N mod c
-P_active = P_tau[u:K]
+training.shuffle_mode: shard
+data.shard_cache_size: 32
 ```
 
-This avoids the partial-execution bug:
+This preserves useful randomization without requiring the whole feature cache to
+live in CPU memory.
+
+## Active Configs
 
 ```text
-4 // 8 + 4 // 8 = 0
-floor((4 + 4) / 8) = 1
+coarse_planner/configs/libero_h32_single_token_build.yaml
+coarse_planner/configs/libero_h32_intent_ae_v1.yaml
+coarse_planner/configs/libero_h32_single_token_planner_v1.yaml
 ```
 
-The recommended default for the first implementation is:
+The current best metric for planner checkpoint selection is:
 
 ```text
-H_p = 64
-K = 8
-c = 8
-H_e = 16
+val_raw_latent_mse
 ```
 
-A refresh is required when:
-
-```text
-cache is empty
-episode reset happened
-transition trigger requested refresh
-N + requested_execute_steps > H_p
-```
-
-Otherwise BridgeAttention receives the remaining suffix `P_tau[u:K]`.
-
-## Strict Training State
-
-Training must simulate the cached inference state. For a sample, choose an anchor
-time `tau` and a consumed-token offset:
-
-```text
-u in {0, q, 2q, ..., K-q}
-t = tau + u * c
-```
-
-The planner input comes from the anchor time:
-
-```text
-P_tau = f_plan(H_tau_vlm, s_tau)
-P_active = P_tau[u:K]
-```
-
-The action prediction input comes from the current time:
-
-```text
-ActionHead(H_t_vlm, s_t, P_active, M_t)
-```
-
-Using `P_t = f_plan(H_t, s_t)` and then cropping only trains variable-length
-suffixes. It does not train the actual cached-plan state where the plan is stale
-relative to the current observation.
-
-## Data Contract
-
-Main training samples for planner-enabled runs should contain:
-
-```text
-current image/state/action fields:
-  images
-  image_mask
-  prompt
-  state
-  action
-  action_mask
-
-planner anchor fields:
-  planner_images
-  planner_image_mask
-  planner_prompt
-  planner_state
-
-action-segment supervision from the anchor:
-  action_segments: [K, c, action_dim]
-  action_segment_mask: [K]
-
-queue/suffix metadata:
-  plan_consumed_steps = N
-  plan_consumed_tokens = floor(N / c)
-  plan_residual_steps = N mod c
-  plan_active_mask: [K]
-```
-
-`plan_active_mask` is false for tokens before `u` and true for the active suffix.
-BridgeAttention receives padded plan tokens plus a key-padding mask, so the action
-head learns to operate with suffix lengths `K, K-q, ..., q`.
-
-## Module Boundaries
-
-```text
-ActionSegmentAutoencoder   action-only definition of segment intent latent
-CoarsePlanner              predicts plan tokens and training-time latents
-PlanTokenQueue             per-session cached suffix consumption by executed steps
-BridgeAttention            fuses current VLM/state, active plan suffix, and memory
-ActionHead                 predicts executable low-level action chunk
-TransitionTrigger          asks for cache refresh and memory writes
-```
-
-The planner does not read memory in this version. Memory and plan tokens remain
-parallel BridgeAttention conditions.
-
-## Implementation Notes
-
-- Remove `coarse_actions`, `coarse_action_mask`, and `build_coarse_action_target`.
-- Keep network dimensions and placeholder AE parameters in config for now.
-- Build the new dataset/cache format before running any training.
-- Do not keep compatibility shims for old compressed targets.
-- Old H32/H48/H64 LIBERO results are retained only as a baseline record of the
-  discarded target, not as evidence for the new intent-latent design.
+Training should stop when the explicit wall-clock deadline expires. The final
+checkpoint choice should still use the best validation checkpoint, not the last
+epoch by default.

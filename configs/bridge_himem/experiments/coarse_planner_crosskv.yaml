@@ -10,7 +10,7 @@ context:
   mode: bridge_clean
 
 memory:
-  enabled: true
+  enabled: false
   placement: crosskv
 
 coarse_planner:

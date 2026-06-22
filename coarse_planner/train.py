@@ -13,7 +13,7 @@ import torch.nn as nn
 from torch.utils.data import DataLoader
 
 from coarse_planner.config import load_config, write_resolved_config
-from coarse_planner.data import build_datasets
+from coarse_planner.data import ShardBatchSampler, build_datasets
 from coarse_planner.evaluate import evaluate_planner
 from coarse_planner.latent_normalization import latent_normalizer_from_checkpoint, resolve_latent_normalizer
 from himem_bridge_vla.model.planner import ActionSegmentAutoencoder, ActionSegmentAutoencoderConfig, CoarsePlanner, CoarsePlannerConfig
@@ -73,16 +73,34 @@ def main() -> int:
 
     train_dataset, val_dataset = build_datasets(config)
     train_shuffle = bool(config["training"].get("shuffle", True))
-    train_loader = DataLoader(
-        train_dataset,
-        batch_size=int(config["training"]["batch_size"]),
-        shuffle=train_shuffle,
-        num_workers=int(config["training"].get("num_workers", 0)),
-        pin_memory=str(args.device).startswith("cuda"),
-    )
+    batch_size = int(config["training"]["batch_size"])
+    shuffle_mode = str(config["training"].get("shuffle_mode", "sample")).lower()
+    if shuffle_mode == "shard":
+        train_loader = DataLoader(
+            train_dataset,
+            batch_sampler=ShardBatchSampler(
+                train_dataset,
+                batch_size=batch_size,
+                shuffle=train_shuffle,
+                drop_last=bool(config["training"].get("drop_last", False)),
+                seed=int(config.get("seed", 42)),
+            ),
+            num_workers=int(config["training"].get("num_workers", 0)),
+            pin_memory=str(args.device).startswith("cuda"),
+        )
+    elif shuffle_mode == "sample":
+        train_loader = DataLoader(
+            train_dataset,
+            batch_size=batch_size,
+            shuffle=train_shuffle,
+            num_workers=int(config["training"].get("num_workers", 0)),
+            pin_memory=str(args.device).startswith("cuda"),
+        )
+    else:
+        raise ValueError(f"training.shuffle_mode must be 'sample' or 'shard', got {shuffle_mode!r}")
     val_loader = DataLoader(
         val_dataset,
-        batch_size=int(config["training"]["batch_size"]),
+        batch_size=batch_size,
         shuffle=False,
         num_workers=int(config["training"].get("num_workers", 0)),
     )
@@ -110,6 +128,9 @@ def main() -> int:
     history = []
     start_epoch = 1
     history_path = run_dir / "train_history.json"
+    patience = int(config["training"].get("early_stopping_patience", 0) or 0)
+    min_delta = float(config["training"].get("early_stopping_min_delta", 0.0))
+    epochs_without_improvement = 0
     if resume_from:
         checkpoint = torch.load(Path(str(resume_from)).expanduser(), map_location=args.device, weights_only=False)
         state_dict = checkpoint.get("model")
@@ -134,7 +155,7 @@ def main() -> int:
         if history_path.exists() and not reset_epoch:
             history = json.loads(history_path.read_text())
             start_epoch = len(history) + 1
-            best_loss = min((float(row["val_loss"]) for row in history), default=float("inf"))
+            best_loss = _best_history_value(history, config)
         else:
             start_epoch = 1 if reset_epoch else int(checkpoint.get("epoch", 0)) + 1
             best_loss = float(checkpoint.get("best_loss", checkpoint.get("val_metrics", {}).get("loss", float("inf"))))
@@ -214,9 +235,17 @@ def main() -> int:
                 summary[f"val_{key}"] = value
         history.append(summary)
         print(json.dumps(summary, sort_keys=True))
+        current_best_value = _checkpoint_selection_value(summary, val_metrics, config)
+        improved = _is_better_checkpoint(current_best_value, best_loss, config, min_delta=min_delta)
+        if improved:
+            best_loss = float(current_best_value)
+            epochs_without_improvement = 0
+        else:
+            epochs_without_improvement += 1
         checkpoint = {
             "epoch": epoch,
             "best_loss": best_loss,
+            "best_metric": str(config.get("training", {}).get("save_best_metric", "val_loss")),
             "model": model.state_dict(),
             "planner_config": model_config.__dict__,
             "segment_autoencoder_config": segment_autoencoder.config.__dict__,
@@ -228,13 +257,24 @@ def main() -> int:
             "latent_normalization_enabled": latent_normalizer is not None,
         }
         torch.save(checkpoint, run_dir / "last.pt")
-        current_best_value = _checkpoint_selection_value(summary, val_metrics, config)
-        if _is_better_checkpoint(current_best_value, best_loss, config):
-            best_loss = float(current_best_value)
-            checkpoint["best_loss"] = best_loss
-            checkpoint["best_metric"] = str(config.get("training", {}).get("save_best_metric", "val_loss"))
+        if improved:
             torch.save(checkpoint, run_dir / "best.pt")
         (run_dir / "train_history.json").write_text(json.dumps(history, indent=2))
+        if patience > 0 and epochs_without_improvement >= patience:
+            print(
+                json.dumps(
+                    {
+                        "event": "early_stop",
+                        "epoch": epoch,
+                        "best_value": best_loss,
+                        "best_metric": str(config.get("training", {}).get("save_best_metric", "val_loss")),
+                        "patience": patience,
+                        "min_delta": min_delta,
+                    },
+                    sort_keys=True,
+                )
+            )
+            break
 
     (run_dir / "train_history.json").write_text(json.dumps(history, indent=2))
     return 0
@@ -327,12 +367,29 @@ def _checkpoint_selection_value(summary: dict[str, Any], val_metrics: dict[str, 
     raise KeyError(f"save_best_metric={metric!r} was not found in validation metrics")
 
 
-def _is_better_checkpoint(value: float, best_value: float, config: dict[str, Any]) -> bool:
+def _is_better_checkpoint(value: float, best_value: float, config: dict[str, Any], *, min_delta: float = 0.0) -> bool:
     mode = str(config.get("training", {}).get("save_best_mode", "min")).lower()
     if mode == "min":
-        return value < best_value
+        return value < best_value - float(min_delta)
     if mode == "max":
-        return value > best_value
+        return value > best_value + float(min_delta)
+    raise ValueError(f"training.save_best_mode must be 'min' or 'max', got {mode!r}")
+
+
+def _best_history_value(history: list[dict[str, Any]], config: dict[str, Any]) -> float:
+    values = []
+    for row in history:
+        try:
+            values.append(_checkpoint_selection_value(row, {}, config))
+        except KeyError:
+            continue
+    if not values:
+        return _initial_best_value(config)
+    mode = str(config.get("training", {}).get("save_best_mode", "min")).lower()
+    if mode == "min":
+        return min(values)
+    if mode == "max":
+        return max(values)
     raise ValueError(f"training.save_best_mode must be 'min' or 'max', got {mode!r}")
 
 

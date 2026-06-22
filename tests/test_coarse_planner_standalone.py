@@ -35,6 +35,72 @@ def test_build_planner_feature_cache_and_dataset(tmp_path):
     assert tuple(sample["action_segment_mask"].shape) == (2,)
 
 
+def test_planner_feature_dataset_can_select_action_only_fields(tmp_path):
+    from coarse_planner.config import load_config
+    from coarse_planner.data import PlannerFeatureDataset, build_planner_feature_cache
+
+    source = tmp_path / "source.pt"
+    torch.save({"episodes": [_episode("ep0"), _episode("ep1")]}, source)
+    config = load_config(None)
+    config["seed"] = 1
+    config["data"].update(
+        {
+            "root": str(tmp_path / "cache"),
+            "input_paths": [str(source)],
+            "include_tail": False,
+            "max_samples_per_shard": 3,
+            "val_fraction": 0.5,
+        }
+    )
+    config["target"].update({"num_plan_steps": 2, "planning_horizon": 4, "gripper_indices": [-1]})
+    build_planner_feature_cache(config)
+
+    train_dataset = PlannerFeatureDataset(
+        config["data"]["root"],
+        split="train",
+        fields=["action_segments", "action_segment_mask"],
+    )
+    sample = train_dataset[0]
+
+    assert set(train_dataset.sample_shapes) == {"action_segments", "action_segment_mask"}
+    assert "vlm_tokens" not in sample
+    assert "state" not in sample
+    assert tuple(sample["action_segments"].shape) == (2, 2, 3)
+    assert tuple(sample["action_segment_mask"].shape) == (2,)
+
+
+def test_shard_batch_sampler_keeps_batches_local(tmp_path):
+    from coarse_planner.config import load_config
+    from coarse_planner.data import PlannerFeatureDataset, ShardBatchSampler, build_planner_feature_cache
+
+    source = tmp_path / "source.pt"
+    torch.save({"episodes": [_episode("ep0"), _episode("ep1")]}, source)
+    config = load_config(None)
+    config["seed"] = 1
+    config["data"].update(
+        {
+            "root": str(tmp_path / "cache"),
+            "input_paths": [str(source)],
+            "include_tail": False,
+            "max_samples_per_shard": 2,
+            "val_fraction": 0.5,
+        }
+    )
+    config["target"].update({"num_plan_steps": 2, "planning_horizon": 4, "gripper_indices": [-1]})
+    build_planner_feature_cache(config)
+
+    train_dataset = PlannerFeatureDataset(config["data"]["root"], split="train")
+    sampler = ShardBatchSampler(train_dataset, batch_size=3, shuffle=True, seed=7)
+    batches = list(iter(sampler))
+    seen = [index for batch in batches for index in batch]
+
+    assert sorted(seen) == list(range(len(train_dataset)))
+    assert all(len(batch) <= 3 for batch in batches)
+    for batch in batches:
+        touched_shards = {train_dataset.index[index][0] for index in batch}
+        assert len(touched_shards) <= 2
+
+
 def test_standalone_model_config_uses_dataset_shapes(tmp_path):
     from coarse_planner.config import load_config
     from coarse_planner.data import build_synthetic_feature_cache, build_datasets

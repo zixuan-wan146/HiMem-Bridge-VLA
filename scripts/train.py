@@ -309,10 +309,7 @@ def custom_collate_fn(batch):
     for optional_key in ("boundary", "progress", "skill_id"):
         if all(optional_key in item for item in batch):
             batch_dict[optional_key] = torch.stack([item[optional_key] for item in batch], dim=0)
-    for optional_key in ("action_segments", "action_segment_mask", "plan_active_mask"):
-        if all(optional_key in item for item in batch):
-            batch_dict[optional_key] = torch.stack([item[optional_key] for item in batch], dim=0)
-    for optional_key in ("plan_consumed_steps", "plan_consumed_tokens", "plan_residual_steps"):
+    for optional_key in ("action_segments", "action_segment_mask"):
         if all(optional_key in item for item in batch):
             batch_dict[optional_key] = torch.stack([item[optional_key] for item in batch], dim=0)
     for optional_key in ("episode_id", "frame_index", "global_frame_index", "segment_id", "segment_start", "segment_end"):
@@ -446,11 +443,9 @@ def build_action_segment_dataset_config(config: dict) -> dict | None:
         return None
     return {
         "enabled": True,
-        "num_plan_steps": int(config.get("coarse_planner_num_plan_steps", 16)),
-        "planning_horizon": int(config.get("coarse_planner_planning_horizon", 128)),
+        "num_plan_steps": int(config.get("coarse_planner_num_plan_steps", 1)),
+        "planning_horizon": int(config.get("coarse_planner_planning_horizon", 32)),
         "action_dim": int(config.get("coarse_planner_action_dim", config.get("per_action_dim", 7))),
-        "execution_horizon": int(config.get("coarse_planner_execution_horizon", config.get("horizon", 16))),
-        "suffix_stride_tokens": config.get("coarse_planner_suffix_stride_tokens"),
     }
 
 
@@ -792,7 +787,7 @@ def train(config):
             )
             planner_fused_tokens = None
             planner_states = None
-            plan_token_mask = batch.get("plan_active_mask")
+            plan_token_mask = None
             if "planner_images" in batch:
                 planner_image_masks = batch.get("planner_image_masks")
                 if planner_image_masks is None:

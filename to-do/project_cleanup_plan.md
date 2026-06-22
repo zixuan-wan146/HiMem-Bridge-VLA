@@ -11,16 +11,16 @@ losing experiment context.
 - Do not reset or checkout files to hide dirty state.
 - Do not mix unrelated files into one commit just because they were edited on the same day.
 - Do not claim LIBERO success-rate improvement from the current closed-loop runs.
-- Keep large artifacts outside git. Runtime packages and model caches stay under `/root/autodl-tmp/`.
+- Keep large artifacts outside git. Runtime packages and model caches stay under `$AUTODL_TMP/`.
 
 ## Current State Snapshot
 
 ```text
 repo head: f1cd2ec
-local repo: /home/myser/Project/Evo/HiMem-Bridge-VLA
-remote repo: /root/autodl-tmp/HiMem-Bridge-VLA
+local repo: <local-repo>/HiMem-Bridge-VLA
+remote repo: $AUTODL_TMP/HiMem-Bridge-VLA
 remote selected package:
-/root/autodl-tmp/runs/transition_trigger/selected/robomme_rmbench_w32_value_delta_transformer_d512
+$AUTODL_TMP/runs/transition_trigger/selected/robomme_rmbench_w32_value_delta_transformer_d512
 ```
 
 The current dirty tree is expected. It contains one coherent feature line plus documentation:

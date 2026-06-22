@@ -35,7 +35,7 @@ primary:
   epochs: 80
 
 fine_tune:
-  resume_from: /root/autodl-tmp/runs/coarse_planner/libero_h64_planner_v2/best.pt
+  resume_from: $AUTODL_TMP/runs/coarse_planner/libero_h64_planner_v2/best.pt
   reset_optimizer: true
   lr: 0.00003
   epochs: 100
@@ -45,12 +45,12 @@ fine_tune:
 
 ```text
 original cache:
-/root/autodl-tmp/datasets/coarse_planner/libero_h64
+$AUTODL_TMP/datasets/coarse_planner/libero_h64
 samples: 2048
 split_counts: train 1824, eval 224
 
 holdout cache:
-/root/autodl-tmp/datasets/coarse_planner/libero_h64_holdout_seed43
+$AUTODL_TMP/datasets/coarse_planner/libero_h64_holdout_seed43
 samples: 2048
 split_counts: train 1867, eval 181
 ```
@@ -82,7 +82,7 @@ Motion actions are normalized to `[-1, 1]`. Gripper actions are binary `{0, 1}`.
 Run:
 
 ```text
-/root/autodl-tmp/runs/coarse_planner/libero_h64_segment_ae_v2
+$AUTODL_TMP/runs/coarse_planner/libero_h64_segment_ae_v2
 ```
 
 Training:
@@ -118,7 +118,7 @@ intent target for this first planner warm-up.
 Run:
 
 ```text
-/root/autodl-tmp/runs/coarse_planner/libero_h64_planner_v2
+$AUTODL_TMP/runs/coarse_planner/libero_h64_planner_v2
 ```
 
 Training:
@@ -202,7 +202,7 @@ more standalone planner epochs at the same data scale. Better next steps are:
 Full final evaluation JSON:
 
 ```text
-/root/autodl-tmp/runs/coarse_planner/libero_h64_planner_v2/final_eval_seed43.json
+$AUTODL_TMP/runs/coarse_planner/libero_h64_planner_v2/final_eval_seed43.json
 ```
 
 ## Next Experiment: Train-Set z Normalization
@@ -259,21 +259,21 @@ Two normalized-z variants were trained from the same v2 raw-z checkpoint:
 v3:
   config: coarse_planner/configs/libero_h64_planner_znorm_v3.yaml
   chunk_loss_weight: 0.25
-  run: /root/autodl-tmp/runs/coarse_planner/libero_h64_planner_znorm_v3
+  run: $AUTODL_TMP/runs/coarse_planner/libero_h64_planner_znorm_v3
   best epoch: 92
 
 v4:
   config: coarse_planner/configs/libero_h64_planner_znorm_chunk1_v4.yaml
   chunk_loss_weight: 1.0
-  run: /root/autodl-tmp/runs/coarse_planner/libero_h64_planner_znorm_chunk1_v4
+  run: $AUTODL_TMP/runs/coarse_planner/libero_h64_planner_znorm_chunk1_v4
   best epoch: 102
 ```
 
 Both runs:
 
 ```text
-AE checkpoint: /root/autodl-tmp/runs/coarse_planner/libero_h64_segment_ae_v2/best.pt
-warm start: /root/autodl-tmp/runs/coarse_planner/libero_h64_planner_v2/best.pt
+AE checkpoint: $AUTODL_TMP/runs/coarse_planner/libero_h64_segment_ae_v2/best.pt
+warm start: $AUTODL_TMP/runs/coarse_planner/libero_h64_planner_v2/best.pt
 latent head conversion: raw-z output -> normalized-z output
 batch_size: 640
 lr: 0.00003
@@ -347,7 +347,7 @@ Recommendation:
 
 ```text
 Use v4 as the current standalone Coarse Planner checkpoint:
-/root/autodl-tmp/runs/coarse_planner/libero_h64_planner_znorm_chunk1_v4/best.pt
+$AUTODL_TMP/runs/coarse_planner/libero_h64_planner_znorm_chunk1_v4/best.pt
 ```
 
 The normalized training objective is not numerically comparable to the old raw-z
@@ -358,16 +358,16 @@ Artifacts:
 
 ```text
 v2 full-metric eval:
-/root/autodl-tmp/runs/coarse_planner/libero_h64_planner_v2/final_eval_seed43_full_metrics.json
+$AUTODL_TMP/runs/coarse_planner/libero_h64_planner_v2/final_eval_seed43_full_metrics.json
 
 v3 eval:
-/root/autodl-tmp/runs/coarse_planner/libero_h64_planner_znorm_v3/final_eval_seed43.json
+$AUTODL_TMP/runs/coarse_planner/libero_h64_planner_znorm_v3/final_eval_seed43.json
 
 v4 eval:
-/root/autodl-tmp/runs/coarse_planner/libero_h64_planner_znorm_chunk1_v4/final_eval_seed43.json
+$AUTODL_TMP/runs/coarse_planner/libero_h64_planner_znorm_chunk1_v4/final_eval_seed43.json
 
 comparison:
-/root/autodl-tmp/runs/coarse_planner/znorm_comparison_seed43.json
+$AUTODL_TMP/runs/coarse_planner/znorm_comparison_seed43.json
 ```
 
 ## 2026-06-19: Toward 0.08 Raw Latent MSE
@@ -516,7 +516,7 @@ v5:
   data: 8192 LIBERO H64 samples
   init: v4 best
   change: moderate late-token weights, chunk_loss_weight=1.0
-  checkpoint: /root/autodl-tmp/runs/coarse_planner/libero_h64_planner_znorm_latew_s8192_v5/best.pt
+  checkpoint: $AUTODL_TMP/runs/coarse_planner/libero_h64_planner_znorm_latew_s8192_v5/best.pt
 
 v6:
   data: 8192 LIBERO H64 samples
@@ -534,7 +534,7 @@ v9/v10:
   data: 16384 LIBERO H64 samples
   init: v8/v9 best
   change: same latent-focused loss on larger cache
-  checkpoint: /root/autodl-tmp/runs/coarse_planner/libero_h64_planner_znorm_latentfocus_s16384_v10/best.pt
+  checkpoint: $AUTODL_TMP/runs/coarse_planner/libero_h64_planner_znorm_latentfocus_s16384_v10/best.pt
 ```
 
 Main comparison on seed43 holdout all:
@@ -582,17 +582,17 @@ v10 artifacts:
 
 ```text
 dataset:
-  /root/autodl-tmp/datasets/coarse_planner/libero_h64_s16384_seed42
+  $AUTODL_TMP/datasets/coarse_planner/libero_h64_s16384_seed42
 
 config:
   coarse_planner/configs/libero_h64_planner_znorm_latentfocus_s16384_v10.yaml
 
 checkpoint:
-  /root/autodl-tmp/runs/coarse_planner/libero_h64_planner_znorm_latentfocus_s16384_v10/best.pt
+  $AUTODL_TMP/runs/coarse_planner/libero_h64_planner_znorm_latentfocus_s16384_v10/best.pt
 
 diagnostics:
-  /root/autodl-tmp/runs/coarse_planner/libero_h64_planner_znorm_latentfocus_s16384_v10/latent_diagnostics_seed43.json
-  /root/autodl-tmp/runs/coarse_planner/libero_h64_planner_znorm_latentfocus_s16384_v10/latent_diagnostics_seed43.md
+  $AUTODL_TMP/runs/coarse_planner/libero_h64_planner_znorm_latentfocus_s16384_v10/latent_diagnostics_seed43.json
+  $AUTODL_TMP/runs/coarse_planner/libero_h64_planner_znorm_latentfocus_s16384_v10/latent_diagnostics_seed43.md
 ```
 
 ## 2026-06-19: 32k Cache Continuation v11
@@ -605,12 +605,12 @@ v11 setup:
 
 ```text
 data:
-  /root/autodl-tmp/datasets/coarse_planner/libero_h64_s32768_seed42
+  $AUTODL_TMP/datasets/coarse_planner/libero_h64_s32768_seed42
   samples: 32768
   train/eval split: 29459 / 3309
 
 init:
-  /root/autodl-tmp/runs/coarse_planner/libero_h64_planner_znorm_latentfocus_s16384_v10/best.pt
+  $AUTODL_TMP/runs/coarse_planner/libero_h64_planner_znorm_latentfocus_s16384_v10/best.pt
 
 config:
   coarse_planner/configs/libero_h64_planner_znorm_latentfocus_s32768_v11.yaml
@@ -635,7 +635,7 @@ v11 internal eval over the 32k cache:
 The best checkpoint is epoch 2:
 
 ```text
-/root/autodl-tmp/runs/coarse_planner/libero_h64_planner_znorm_latentfocus_s32768_v11/best.pt
+$AUTODL_TMP/runs/coarse_planner/libero_h64_planner_znorm_latentfocus_s32768_v11/best.pt
 ```
 
 Seed43 holdout comparison:
@@ -703,17 +703,17 @@ v11 artifacts:
 
 ```text
 dataset:
-  /root/autodl-tmp/datasets/coarse_planner/libero_h64_s32768_seed42
+  $AUTODL_TMP/datasets/coarse_planner/libero_h64_s32768_seed42
 
 config:
   coarse_planner/configs/libero_h64_planner_znorm_latentfocus_s32768_v11.yaml
 
 checkpoint:
-  /root/autodl-tmp/runs/coarse_planner/libero_h64_planner_znorm_latentfocus_s32768_v11/best.pt
+  $AUTODL_TMP/runs/coarse_planner/libero_h64_planner_znorm_latentfocus_s32768_v11/best.pt
 
 diagnostics:
-  /root/autodl-tmp/runs/coarse_planner/libero_h64_planner_znorm_latentfocus_s32768_v11/latent_diagnostics_seed43.json
-  /root/autodl-tmp/runs/coarse_planner/libero_h64_planner_znorm_latentfocus_s32768_v11/latent_diagnostics_seed43.md
+  $AUTODL_TMP/runs/coarse_planner/libero_h64_planner_znorm_latentfocus_s32768_v11/latent_diagnostics_seed43.json
+  $AUTODL_TMP/runs/coarse_planner/libero_h64_planner_znorm_latentfocus_s32768_v11/latent_diagnostics_seed43.md
 ```
 
 ## 2026-06-19: Latent-Focused 32k Continuation v12
@@ -728,7 +728,7 @@ v12 changes from v11:
 
 ```text
 init:
-  /root/autodl-tmp/runs/coarse_planner/libero_h64_planner_znorm_latentfocus_s32768_v11/best.pt
+  $AUTODL_TMP/runs/coarse_planner/libero_h64_planner_znorm_latentfocus_s32768_v11/best.pt
 
 config:
   coarse_planner/configs/libero_h64_planner_znorm_latentfocus_s32768_v12.yaml
@@ -802,11 +802,11 @@ config:
   coarse_planner/configs/libero_h64_planner_znorm_latentfocus_s32768_v12.yaml
 
 checkpoint:
-  /root/autodl-tmp/runs/coarse_planner/libero_h64_planner_znorm_latentfocus_s32768_v12/best.pt
+  $AUTODL_TMP/runs/coarse_planner/libero_h64_planner_znorm_latentfocus_s32768_v12/best.pt
 
 diagnostics:
-  /root/autodl-tmp/runs/coarse_planner/libero_h64_planner_znorm_latentfocus_s32768_v12/latent_diagnostics_seed43.json
-  /root/autodl-tmp/runs/coarse_planner/libero_h64_planner_znorm_latentfocus_s32768_v12/latent_diagnostics_seed43.md
+  $AUTODL_TMP/runs/coarse_planner/libero_h64_planner_znorm_latentfocus_s32768_v12/latent_diagnostics_seed43.json
+  $AUTODL_TMP/runs/coarse_planner/libero_h64_planner_znorm_latentfocus_s32768_v12/latent_diagnostics_seed43.md
 ```
 
 ## 2026-06-19: Late-Token Focus v13
@@ -819,7 +819,7 @@ v13 changes from v12:
 
 ```text
 init:
-  /root/autodl-tmp/runs/coarse_planner/libero_h64_planner_znorm_latentfocus_s32768_v12/best.pt
+  $AUTODL_TMP/runs/coarse_planner/libero_h64_planner_znorm_latentfocus_s32768_v12/best.pt
 
 config:
   coarse_planner/configs/libero_h64_planner_znorm_latefocus_s32768_v13.yaml
@@ -886,11 +886,11 @@ config:
   coarse_planner/configs/libero_h64_planner_znorm_latefocus_s32768_v13.yaml
 
 checkpoint:
-  /root/autodl-tmp/runs/coarse_planner/libero_h64_planner_znorm_latefocus_s32768_v13/best.pt
+  $AUTODL_TMP/runs/coarse_planner/libero_h64_planner_znorm_latefocus_s32768_v13/best.pt
 
 diagnostics:
-  /root/autodl-tmp/runs/coarse_planner/libero_h64_planner_znorm_latefocus_s32768_v13/latent_diagnostics_seed43.json
-  /root/autodl-tmp/runs/coarse_planner/libero_h64_planner_znorm_latefocus_s32768_v13/latent_diagnostics_seed43.md
+  $AUTODL_TMP/runs/coarse_planner/libero_h64_planner_znorm_latefocus_s32768_v13/latent_diagnostics_seed43.json
+  $AUTODL_TMP/runs/coarse_planner/libero_h64_planner_znorm_latefocus_s32768_v13/latent_diagnostics_seed43.md
 ```
 
 ## 2026-06-19: Final Planner-Only Attempts v14-v17
@@ -932,7 +932,7 @@ config:
   coarse_planner/configs/libero_h64_s63044_build.yaml
 
 cache:
-  /root/autodl-tmp/datasets/coarse_planner/libero_h64_s63044_seed42
+  $AUTODL_TMP/datasets/coarse_planner/libero_h64_s63044_seed42
 
 samples:
   total: 63044
@@ -977,7 +977,7 @@ v13 direction:
 
 ```text
 checkpoint:
-  /root/autodl-tmp/runs/coarse_planner/libero_h64_planner_znorm_interp_v17_alpha075/best.pt
+  $AUTODL_TMP/runs/coarse_planner/libero_h64_planner_znorm_interp_v17_alpha075/best.pt
 
 formula:
   theta_v17 = theta_v12 + 0.75 * (theta_v13 - theta_v12)
@@ -1036,14 +1036,14 @@ v17 artifacts:
 
 ```text
 checkpoint:
-  /root/autodl-tmp/runs/coarse_planner/libero_h64_planner_znorm_interp_v17_alpha075/best.pt
+  $AUTODL_TMP/runs/coarse_planner/libero_h64_planner_znorm_interp_v17_alpha075/best.pt
 
 diagnostics:
-  /root/autodl-tmp/runs/coarse_planner/libero_h64_planner_znorm_interp_v17_alpha075/latent_diagnostics_seed43.json
-  /root/autodl-tmp/runs/coarse_planner/libero_h64_planner_znorm_interp_v17_alpha075/latent_diagnostics_seed43.md
+  $AUTODL_TMP/runs/coarse_planner/libero_h64_planner_znorm_interp_v17_alpha075/latent_diagnostics_seed43.json
+  $AUTODL_TMP/runs/coarse_planner/libero_h64_planner_znorm_interp_v17_alpha075/latent_diagnostics_seed43.md
 
 interpolation sweep:
-  /root/autodl-tmp/runs/coarse_planner/v12_v13_interpolation_eval.json
+  $AUTODL_TMP/runs/coarse_planner/v12_v13_interpolation_eval.json
 ```
 
 Post-run cleanup note:
@@ -1053,13 +1053,13 @@ To recover disk space, intermediate datasets and runs were removed after the
 final v17 checkpoint was verified.
 
 Retained remote datasets:
-  /root/autodl-tmp/datasets/coarse_planner/libero_h64
-  /root/autodl-tmp/datasets/coarse_planner/libero_h64_holdout_seed43
-  /root/autodl-tmp/datasets/coarse_planner/libero_h64_s32768_seed42
+  $AUTODL_TMP/datasets/coarse_planner/libero_h64
+  $AUTODL_TMP/datasets/coarse_planner/libero_h64_holdout_seed43
+  $AUTODL_TMP/datasets/coarse_planner/libero_h64_s32768_seed42
 
 Retained remote runs:
-  /root/autodl-tmp/runs/coarse_planner/libero_h64_segment_ae_v2
-  /root/autodl-tmp/runs/coarse_planner/libero_h64_planner_znorm_interp_v17_alpha075
+  $AUTODL_TMP/runs/coarse_planner/libero_h64_segment_ae_v2
+  $AUTODL_TMP/runs/coarse_planner/libero_h64_planner_znorm_interp_v17_alpha075
 
 Older artifact paths in this document are historical records of the experiment.
 They are not guaranteed to remain on disk after cleanup.

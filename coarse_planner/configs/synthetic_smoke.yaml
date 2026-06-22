@@ -2,7 +2,7 @@ seed: 7
 
 data:
   format: planner_feature_cache
-  root: /root/autodl-tmp/datasets/coarse_planner/smoke
+  root: ../datasets/coarse_planner/smoke
   manifest: manifest.json
   input_paths: []
   stride: 1
@@ -16,7 +16,7 @@ target:
   gripper_indices: [-1]
 
 segment_autoencoder:
-  checkpoint: /root/autodl-tmp/runs/coarse_planner/smoke_segment_ae/best.pt
+  checkpoint: ../runs/coarse_planner/smoke_segment_ae/best.pt
   latent_dim: 4
   hidden_dim: 16
   num_layers: 1
@@ -56,5 +56,5 @@ loss:
   loss_on_active_suffix_only: false
 
 outputs:
-  run_dir: /root/autodl-tmp/runs/coarse_planner/smoke
-  segment_ae_run_dir: /root/autodl-tmp/runs/coarse_planner/smoke_segment_ae
+  run_dir: ../runs/coarse_planner/smoke
+  segment_ae_run_dir: ../runs/coarse_planner/smoke_segment_ae

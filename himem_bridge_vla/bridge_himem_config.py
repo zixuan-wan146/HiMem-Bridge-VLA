@@ -14,7 +14,6 @@ ACTION_QUERY_SOURCES = {"learned_bridge"}
 COARSE_PLANNER_TYPES = {"query_cross_attention"}
 COARSE_PLANNER_LOSSES = {"intent_latent"}
 COARSE_PLANNER_PLACEMENTS = {"bridge_crosskv"}
-COARSE_PLANNER_REFRESH_POLICIES = {"always", "transition_or_queue"}
 
 
 @dataclass(frozen=True)
@@ -89,10 +88,8 @@ class CoarsePlannerConfig:
     hidden_dim: int = 896
     num_layers: int = 4
     num_heads: int = 8
-    num_plan_steps: int = 8
-    planning_horizon: int = 64
-    execution_horizon: int = 16
-    suffix_stride_tokens: int = 2
+    num_plan_steps: int = 1
+    planning_horizon: int = 32
     latent_dim: int = 128
     latent_head_hidden_dim: int = 512
     segment_action_dim: int = 7
@@ -105,15 +102,14 @@ class CoarsePlannerConfig:
     segment_autoencoder_checkpoint: str | None = None
     input_memory: bool = False
     placement: str = "bridge_crosskv"
-    refresh_policy: str = "transition_or_queue"
     gripper_indices: tuple[int, ...] = (-1,)
 
 
 @dataclass(frozen=True)
 class ActionHeadConfig:
     kind: str = "flowmatching"
-    use_existing_checkpoint_config: bool = True
-    horizon: int | None = None
+    use_existing_checkpoint_config: bool = False
+    horizon: int | None = 32
     per_action_dim: int | None = None
 
 
@@ -218,17 +214,11 @@ class BridgeHiMemConfig:
             raise ValueError(f"coarse_planner.loss must be one of {sorted(COARSE_PLANNER_LOSSES)}")
         if self.coarse_planner.placement not in COARSE_PLANNER_PLACEMENTS:
             raise ValueError(f"coarse_planner.placement must be one of {sorted(COARSE_PLANNER_PLACEMENTS)}")
-        if self.coarse_planner.refresh_policy not in COARSE_PLANNER_REFRESH_POLICIES:
-            raise ValueError(
-                f"coarse_planner.refresh_policy must be one of {sorted(COARSE_PLANNER_REFRESH_POLICIES)}"
-            )
         _positive_int(self.coarse_planner.hidden_dim, "coarse_planner.hidden_dim")
         _positive_int(self.coarse_planner.num_layers, "coarse_planner.num_layers")
         _positive_int(self.coarse_planner.num_heads, "coarse_planner.num_heads")
         _positive_int(self.coarse_planner.num_plan_steps, "coarse_planner.num_plan_steps")
         _positive_int(self.coarse_planner.planning_horizon, "coarse_planner.planning_horizon")
-        _positive_int(self.coarse_planner.execution_horizon, "coarse_planner.execution_horizon")
-        _positive_int(self.coarse_planner.suffix_stride_tokens, "coarse_planner.suffix_stride_tokens")
         _positive_int(self.coarse_planner.latent_dim, "coarse_planner.latent_dim")
         _positive_int(self.coarse_planner.latent_head_hidden_dim, "coarse_planner.latent_head_hidden_dim")
         _positive_int(self.coarse_planner.segment_action_dim, "coarse_planner.segment_action_dim")
@@ -255,11 +245,6 @@ class BridgeHiMemConfig:
                 raise ValueError("coarse_planner.input_memory must remain false in the first version")
             if self.coarse_planner.planning_horizon % self.coarse_planner.num_plan_steps != 0:
                 raise ValueError("coarse_planner.planning_horizon must be divisible by num_plan_steps")
-            token_span = self.coarse_planner.planning_horizon // self.coarse_planner.num_plan_steps
-            if self.coarse_planner.execution_horizon % token_span != 0:
-                raise ValueError("coarse_planner.execution_horizon must be divisible by planner token span")
-            if self.coarse_planner.suffix_stride_tokens != self.coarse_planner.execution_horizon // token_span:
-                raise ValueError("coarse_planner.suffix_stride_tokens must equal execution_horizon / token_span")
         if self.action_head.kind != "flowmatching":
             raise ValueError("action_head.kind must be 'flowmatching'")
         if self.action_head.horizon is not None:
@@ -304,8 +289,6 @@ class BridgeHiMemConfig:
             "coarse_planner_num_heads": self.coarse_planner.num_heads,
             "coarse_planner_num_plan_steps": self.coarse_planner.num_plan_steps,
             "coarse_planner_planning_horizon": self.coarse_planner.planning_horizon,
-            "coarse_planner_execution_horizon": self.coarse_planner.execution_horizon,
-            "coarse_planner_suffix_stride_tokens": self.coarse_planner.suffix_stride_tokens,
             "coarse_planner_latent_dim": self.coarse_planner.latent_dim,
             "coarse_planner_latent_head_hidden_dim": self.coarse_planner.latent_head_hidden_dim,
             "coarse_planner_action_dim": self.coarse_planner.segment_action_dim,
@@ -318,7 +301,6 @@ class BridgeHiMemConfig:
             "coarse_planner_segment_autoencoder_checkpoint": self.coarse_planner.segment_autoencoder_checkpoint,
             "coarse_planner_input_memory": self.coarse_planner.input_memory,
             "coarse_planner_placement": self.coarse_planner.placement,
-            "coarse_planner_refresh_policy": self.coarse_planner.refresh_policy,
             "coarse_planner_gripper_indices": list(self.coarse_planner.gripper_indices),
         }
         if not self.action_head.use_existing_checkpoint_config:
@@ -477,8 +459,6 @@ def _coerce_field_value(name: str, value: Any, label: str) -> Any:
         "segment_action_dim",
         "num_plan_steps",
         "planning_horizon",
-        "execution_horizon",
-        "suffix_stride_tokens",
     }:
         return _int(value, label)
     if name in {
@@ -506,7 +486,6 @@ def _coerce_field_value(name: str, value: Any, label: str) -> Any:
         "type",
         "loss",
         "placement",
-        "refresh_policy",
         "segment_autoencoder_checkpoint",
     }:
         return str(value)
