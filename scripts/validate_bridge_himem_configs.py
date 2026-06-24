@@ -33,7 +33,7 @@ def main() -> int:
         legacy = config.to_legacy_model_config()
         print(
             f"{display_project_path(path, REPO_ROOT)}: experiment={config.experiment_name} "
-            f"bridge={legacy['use_bridge']} memory={legacy['use_himem']} "
+            f"bridge={legacy['use_bridge']} memory={legacy['use_memory']} "
             f"variant={legacy['bridge_variant']} context={legacy['bridge_context_mode']}"
         )
     return 0

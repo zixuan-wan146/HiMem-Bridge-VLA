@@ -11,5 +11,3 @@ context:
 
 memory:
   enabled: true
-  placement: crosskv
-

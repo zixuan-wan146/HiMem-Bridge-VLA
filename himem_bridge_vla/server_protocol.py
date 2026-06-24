@@ -50,12 +50,6 @@ def validate_inference_request(
     if not isinstance(prompt, str):
         prompt = str(prompt)
 
-    episode_id = data.get("episode_id")
-    if episode_id is not None and not isinstance(episode_id, str):
-        episode_id = str(episode_id)
-    session_id = data.get("session_id")
-    if session_id is not None and not isinstance(session_id, str):
-        session_id = str(session_id)
     robot_key = data.get("robot_key")
     if robot_key is not None and not isinstance(robot_key, str):
         robot_key = str(robot_key)
@@ -66,10 +60,7 @@ def validate_inference_request(
         "prompt": prompt,
         "image_mask": image_mask,
         "action_mask": action_mask,
-        "episode_id": episode_id,
-        "session_id": session_id,
         "robot_key": robot_key,
-        "reset_memory": bool(data.get("reset_memory", False)),
         "return_debug": bool(data.get("return_debug", False)),
     }
 

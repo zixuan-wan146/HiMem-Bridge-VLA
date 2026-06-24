@@ -149,9 +149,6 @@ def infer_from_json_dict(data: dict, model, normalizer):
             prompt=prompt,
             state_input=norm_state,
             action_mask=action_mask,
-            episode_id=request["episode_id"],
-            session_id=request["session_id"],
-            reset_memory=request["reset_memory"],
         )
         if action.numel() % model_action_dim != 0:
             raise ValueError(f"Model returned {action.numel()} action values, not divisible by per_action_dim={model_action_dim}")

@@ -10,14 +10,12 @@ try:
     from ..experiment_config import resolve_experiment_config
     from .action_head.flow_matching import FlowmatchingActionHead
     from .bridge import BridgeAdapter, BridgeAdapterConfig, BridgeAdapterOutput
-    from .himem import EpisodeMemoryBank, HierarchicalEpisodeMemory, HiMemTokenWriter
     from .internvl3.internvl3_embedder import InternVL3Embedder, InternVL3EmbeddingOutput
     from .planner import CoarsePlanner, CoarsePlannerConfig, CoarsePlannerOutput
 except ImportError:
     from himem_bridge_vla.experiment_config import resolve_experiment_config
     from himem_bridge_vla.model.action_head.flow_matching import FlowmatchingActionHead
     from himem_bridge_vla.model.bridge import BridgeAdapter, BridgeAdapterConfig, BridgeAdapterOutput
-    from himem_bridge_vla.model.himem import EpisodeMemoryBank, HierarchicalEpisodeMemory, HiMemTokenWriter
     from himem_bridge_vla.model.internvl3.internvl3_embedder import InternVL3Embedder, InternVL3EmbeddingOutput
     from himem_bridge_vla.model.planner import CoarsePlanner, CoarsePlannerConfig, CoarsePlannerOutput
 
@@ -74,16 +72,12 @@ class HiMemBridgeVLA(nn.Module):
         )
         self.action_head = FlowmatchingActionHead(config=action_head_config).to(self._device)
         self.use_bridge = bool(config.get("use_bridge", False))
-        self.use_himem = bool(config.get("use_himem", False)) and self.use_bridge
         self.bridge_variant = str(config.get("bridge_variant", "crosskv"))
         self.bridge_context_mode = str(
             config.get("bridge_context_mode", "bridge_residual" if self.use_bridge else "fused_only")
         )
         self.memory_placement = str(config.get("memory_placement", "crosskv"))
         self.bridge_adapter = None
-        self.memory_bank = None
-        self.memory_runtime = None
-        self.memory_writer = None
         self.coarse_planner = None
         self.skill_tokens = None
         self.fused_residual_gate = None
@@ -140,28 +134,6 @@ class HiMemBridgeVLA(nn.Module):
             )
             self.coarse_planner = CoarsePlanner(planner_config).to(self._device)
 
-        if self.use_himem:
-            if self.memory_placement not in {"crosskv", "mixed_latent"}:
-                raise ValueError(f"Unknown memory_placement: {self.memory_placement}")
-            self.memory_bank = EpisodeMemoryBank(
-                max_tokens=config.get("memory_max_tokens", 32),
-                token_dim=config.get("bridge_hidden_dim", config.get("embed_dim", 896)),
-            )
-            self.memory_writer = HiMemTokenWriter(
-                hidden_dim=config.get("bridge_hidden_dim", config.get("embed_dim", 896)),
-                num_tokens=config.get("memory_write_tokens", 4),
-                num_heads=config.get("memory_writer_num_heads", config.get("bridge_num_heads", 8)),
-                dropout=config.get("memory_writer_dropout", config.get("dropout", 0.0)),
-            ).to(self._device)
-            self.memory_runtime = HierarchicalEpisodeMemory(
-                bank=self.memory_bank,
-                read_top_k=config.get("memory_read_top_k", 8),
-                write_threshold=config.get("memory_write_threshold", 0.5),
-                segment_accumulator=config.get("memory_segment_accumulator", "ema"),
-                segment_ema_decay=config.get("memory_segment_ema_decay", 0.9),
-                write_policy=config.get("memory_write_policy", "boundary"),
-            )
-
     def get_vl_embeddings(
         self,
         images: List[Image.Image],
@@ -207,6 +179,7 @@ class HiMemBridgeVLA(nn.Module):
         embodiment_ids: torch.Tensor = None,
         hidden_states: list[torch.Tensor] | None = None,
         memory_context: torch.Tensor | None = None,
+        memory_context_mask: torch.Tensor | None = None,
         planner_fused_tokens: torch.Tensor | None = None,
         planner_state: torch.Tensor | None = None,
         plan_token_mask: torch.Tensor | None = None,
@@ -216,6 +189,7 @@ class HiMemBridgeVLA(nn.Module):
             state=state,
             hidden_states=hidden_states,
             memory_context=memory_context,
+            memory_context_mask=memory_context_mask,
             planner_fused_tokens=planner_fused_tokens,
             planner_state=planner_state,
             plan_token_mask=plan_token_mask,
@@ -245,10 +219,6 @@ class HiMemBridgeVLA(nn.Module):
         state_input: Union[list, torch.Tensor],
         return_cls_only: Union[bool, None] = None,
         action_mask: Union[torch.Tensor, None] = None,
-        episode_id: str | None = None,
-        session_id: str | None = None,
-        reset_memory: bool = False,
-        memory_write_gate: torch.Tensor | float | None = None,
     ) -> torch.Tensor:
         embedding_output = self.get_vl_embeddings(
             images=images,
@@ -264,16 +234,13 @@ class HiMemBridgeVLA(nn.Module):
             fused_tokens = embedding_output
             hidden_states = None
         state_tensor = self.prepare_state(state_input)
-        memory_episode_id = self._memory_episode_id(episode_id, session_id)
-        memory_context = self._read_memory(memory_episode_id, reset_memory, fused_tokens)
         action = self.predict_action(
             fused_tokens,
             state_tensor,
             action_mask=action_mask,
             hidden_states=hidden_states,
-            memory_context=memory_context,
+            memory_context=None,
         )
-        self._maybe_write_memory(memory_episode_id, gate_override=memory_write_gate)
         return action
 
     def forward(
@@ -285,6 +252,7 @@ class HiMemBridgeVLA(nn.Module):
         embodiment_ids=None,
         hidden_states=None,
         memory_context=None,
+        memory_context_mask=None,
         planner_fused_tokens=None,
         planner_state=None,
         plan_token_mask=None,
@@ -297,6 +265,7 @@ class HiMemBridgeVLA(nn.Module):
             embodiment_ids,
             hidden_states=hidden_states,
             memory_context=memory_context,
+            memory_context_mask=memory_context_mask,
             planner_fused_tokens=planner_fused_tokens,
             planner_state=planner_state,
             plan_token_mask=plan_token_mask,
@@ -309,6 +278,7 @@ class HiMemBridgeVLA(nn.Module):
         state: torch.Tensor | None,
         hidden_states: list[torch.Tensor] | None,
         memory_context: torch.Tensor | None,
+        memory_context_mask: torch.Tensor | None,
         planner_fused_tokens: torch.Tensor | None = None,
         planner_state: torch.Tensor | None = None,
         plan_token_mask: torch.Tensor | None = None,
@@ -338,6 +308,7 @@ class HiMemBridgeVLA(nn.Module):
             plan_tokens=plan_tokens,
             plan_token_mask=plan_token_mask,
             memory_context=memory_context if self.memory_placement == "crosskv" else None,
+            memory_context_mask=memory_context_mask if self.memory_placement == "crosskv" else None,
         )
         self.last_bridge_output = bridge_output
         return self._build_action_context(fused_tokens, bridge_output.bridge_tokens, memory_context)
@@ -392,38 +363,6 @@ class HiMemBridgeVLA(nn.Module):
         planner_state = state if planner_state is None else planner_state
         self.last_coarse_planner_output = self.coarse_planner(planner_fused_tokens, planner_state)
         return self.last_coarse_planner_output.plan_tokens
-
-    def _read_memory(
-        self,
-        episode_id: str | None,
-        reset_memory: bool,
-        fused_tokens: torch.Tensor,
-    ) -> torch.Tensor | None:
-        if self.memory_bank is None or not episode_id:
-            return None
-        if reset_memory:
-            self.memory_runtime.reset(episode_id)
-        return self.memory_runtime.read(episode_id, fused_tokens)
-
-    def _maybe_write_memory(self, episode_id: str | None, *, gate_override: torch.Tensor | float | None = None) -> None:
-        if self.memory_runtime is None or not episode_id or self.last_bridge_output is None:
-            return
-        if gate_override is None:
-            gate = torch.sigmoid(self.last_bridge_output.boundary_logits.detach()).reshape(-1)
-        else:
-            gate = gate_override
-        if self.memory_writer is None:
-            memory_tokens = self.last_bridge_output.bridge_tokens.detach().mean(dim=1)
-        else:
-            memory_tokens = self.memory_writer(self.last_bridge_output.bridge_tokens.detach())
-        self.memory_runtime.write(episode_id, memory_tokens, gate=gate)
-
-    def _memory_episode_id(self, episode_id: str | None, session_id: str | None = None) -> str | None:
-        if not episode_id:
-            return None
-        if not session_id:
-            return str(episode_id)
-        return f"{session_id}:{episode_id}"
 
     def _freeze_module(self, module: nn.Module, name: str):
         logging.info(f"Freezing {name} parameters...")

@@ -1,32 +1,30 @@
 # Configs
 
-This directory contains reusable, checked-in configuration only. Runtime outputs and machine-local
-paths should not be written here.
+This directory contains reusable, checked-in configuration only. Runtime outputs and machine-local paths should not be written here.
 
 ## Bridge-HiMem
 
 ```text
 bridge_himem/
-  base.yaml                 Shared defaults for Bridge-HiMem experiments
+  base.yaml                         Shared defaults for Bridge-HiMem experiments
   experiments/
-    baseline.yaml           Fused-token baseline
-    crosskv_clean.yaml      Memory enters BridgeAttention cross-attention
-    mixed_latent_clean.yaml Memory enters action-head context
-    mixed_latent_skill.yaml Mixed-latent plus learnable skill tokens
+    baseline.yaml                   Fused-token baseline
+    crosskv_clean.yaml              BridgeAttention baseline
+    mixed_latent_clean.yaml         Memory enters action-head context
+    mixed_latent_skill.yaml         Mixed-latent plus learnable skill tokens
+    coarse_planner_crosskv.yaml     Active H32 planner + BridgeAttention integration config
 ```
 
 Rules:
 
 - Experiment files use `extends` and should only override the fields that define the ablation.
-- Shared dimensions, raw VLM layers, writer settings, and segment accumulator defaults live in
-  `bridge_himem/base.yaml`.
-- VLM behavior switches such as `vlm.allow_image_token_truncation` live in Bridge-HiMem YAML, not
-  in model code.
-- Validate before training:
+- Shared dimensions, raw VLM layers, bridge settings, and action horizon defaults live in `bridge_himem/base.yaml`.
+- Current H32 planner integration keeps `action_head.horizon: 32`.
+- Current H32 planner integration keeps `coarse_planner.num_plan_steps: 1` and `coarse_planner.planning_horizon: 32`.
+- Current H32 planner integration keeps `coarse_planner.input_memory: false`.
+- Validate before training with `python scripts/validate_bridge_himem_configs.py`.
 
-```bash
-python3 scripts/validate_bridge_himem_configs.py
-```
+Standalone coarse-planner cache, AE, and planner configs live under `coarse_planner/configs/`, not in this directory.
 
 ## LIBERO Profiles
 
@@ -36,8 +34,7 @@ libero_profiles/
   full_eval.env  Default full evaluation profile
 ```
 
-Profile files are plain `KEY=VALUE` files parsed by the LIBERO run scripts. They are not shell
-scripts and should not contain secrets.
+Profile files are plain `KEY=VALUE` files parsed by the LIBERO run scripts. They are not shell scripts and should not contain secrets.
 
 ## Dataset Configs
 
@@ -46,28 +43,13 @@ datasets/
   simulation.yaml  Generic LeRobot-style simulation training data
 ```
 
-Relative dataset paths in these YAML files are resolved from `--dataset_config_base_dir`, which
-defaults to the repository root in `scripts/train.py`.
+Relative dataset paths in these YAML files are resolved from `--dataset_config_base_dir`, which defaults to the repository root in `scripts/train.py`.
 
 ## Training Profiles
 
-```text
-training/
-```
+Training profiles keep experiment hyperparameters out of shell commands. Use CLI arguments only for machine-local overrides such as `--save_dir`, `--cache_dir`, `--resume_path`, or one-off ablations.
 
-Training profiles keep experiment hyperparameters out of shell commands. Add project-specific
-profiles here when a benchmark is selected. Use CLI arguments only for
-machine-local overrides such as `--save_dir`, `--cache_dir`, `--resume_path`, or one-off ablations.
-The default cache path is `run_outputs/training_data_cache`; cache entries are automatically
-namespaced by the dataset config and action horizon.
-Auxiliary supervision weights such as `boundary_loss_weight` and `progress_loss_weight` are training
-profile parameters.
-
-Validate profiles before training:
-
-```bash
-python3 scripts/validate_training_configs.py
-```
+Validate profiles before training with `python scripts/validate_training_configs.py`.
 
 ## DeepSpeed
 

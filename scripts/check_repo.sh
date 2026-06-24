@@ -81,6 +81,15 @@ run_ruff() {
   log "WARN: ruff is not installed for $python_bin; skipped lint"
 }
 
+run_pytest() {
+  local pytest_args=(-m pytest)
+  if [ "${HIMEM_CHECK_INCLUDE_TRAINING:-0}" != "1" ]; then
+    log "Skipping training smoke tests; set HIMEM_CHECK_INCLUDE_TRAINING=1 to include them"
+    pytest_args+=(--ignore=tests/test_memory_token_cache_adapter.py)
+  fi
+  run_step "Unit tests" "$python_bin" "${pytest_args[@]}"
+}
+
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 repo_root="$(cd "$script_dir/.." && pwd)"
 python_bin="$(find_python)"
@@ -93,7 +102,7 @@ run_step "Runtime environment check" "$python_bin" scripts/check_runtime_environ
 if [ "${HIMEM_CHECK_SKIP_PYTEST:-0}" = "1" ]; then
   log "Skipping pytest because HIMEM_CHECK_SKIP_PYTEST=1"
 else
-  run_step "Unit tests" "$python_bin" -m pytest
+  run_pytest
 fi
 
 run_ruff
@@ -101,6 +110,7 @@ check_shell_syntax
 run_step "Repository preflight" "$python_bin" scripts/preflight.py
 run_step "Bridge-HiMem config validation" "$python_bin" scripts/validate_bridge_himem_configs.py
 run_step "Training config validation" "$python_bin" scripts/validate_training_configs.py
+run_step "Benchmark inventory" "$python_bin" scripts/inspect_benchmarks.py --allow-missing
 run_step "LIBERO setup dry-run" env HIMEM_SETUP_LIBERO_DRY_RUN=1 scripts/setup_libero_env.sh
 run_step \
   "LIBERO checkpoint download dry-run" \
@@ -122,6 +132,24 @@ run_step \
   --checkpoint run_outputs/check_repo_checkpoints/HiMem_LIBERO \
   --profile configs/libero_profiles/smoke.env \
   --kind smoke
+run_step \
+  "RMBench eval dry-run" \
+  env HIMEM_RMBENCH_DRY_RUN=1 HIMEM_RMBENCH_TASKS=press_button \
+  scripts/run_rmbench_eval.sh
+rmbench_root="${HIMEM_RMBENCH_ROOT:-${AUTODL_TMP:-/root/autodl-tmp}/benchmarks/RMBench}"
+if [ "${HIMEM_CHECK_DRY_RUN:-0}" = "1" ] || [ -d "$rmbench_root" ]; then
+  run_step \
+    "RMBench eval plan-only" \
+    env HIMEM_RMBENCH_PLAN_ONLY=1 HIMEM_RMBENCH_TASKS=press_button \
+    HIMEM_RMBENCH_RUN_DIR=run_outputs/check_repo_rmbench_plan_only \
+    HIMEM_RMBENCH_PYTHON="$python_bin" \
+    scripts/run_rmbench_eval.sh
+elif [ "${HIMEM_CHECK_REQUIRE_RMBENCH:-0}" = "1" ]; then
+  log "ERROR: RMBench root not found: $rmbench_root"
+  exit 1
+else
+  log "Skipping RMBench eval plan-only because RMBench root was not found: $rmbench_root"
+fi
 
 if [ "${HIMEM_CHECK_SKIP_COMPILE:-0}" = "1" ]; then
   log "Skipping compileall because HIMEM_CHECK_SKIP_COMPILE=1"

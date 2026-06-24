@@ -2,28 +2,20 @@
 
 Date: 2026-06-22
 
-Status: H32 single-token intent planning.
+Status: active H32 single-token intent planner.
 
 ## Core Decision
 
-The active planner no longer predicts a cached multi-token suffix. It predicts
-one plan token at every inference step:
+The planner predicts one plan token at every inference step:
 
 ```text
-P_t = CoarsePlanner(H_t_vlm, s_t)
+P_t = CoarsePlanner(H_t, s_t)
 P_t: [B, 1, D]
 ```
 
-The single token represents the intent for the next 32 low-level action steps.
-Every inference recomputes it from the current observation.
-
-This removes the previous failure mode where a long cached plan could remain in
-force after the world state had drifted. The closed-loop mechanism is now
-frequent replanning, not transition-triggered hard refresh.
+The token represents the intent for the next 32 low-level action steps. Every inference recomputes it from the current observation and robot state. Closed-loop correction comes from frequent replanning, not from a transition-triggered refresh of a cached long plan.
 
 ## Removed Semantics
-
-The active H32 path does not use:
 
 ```text
 PlanTokenQueue
@@ -34,23 +26,18 @@ transition-trigger refresh decisions
 H64 multi-token targets
 ```
 
-Transition trigger is deleted from the active server/eval/test path. It should
-not be retrained for this design unless the planning horizon is lengthened again
-and a concrete closed-loop failure case requires it.
+Do not add these concepts back unless the project explicitly returns to a longer cached planning horizon.
 
 ## Action Intent Target
 
-The planner target is still defined by an action-only autoencoder. For each
-sample:
+The planner target is defined by an action-only autoencoder:
 
 ```text
 A_t: [32, action_dim]
 z_t* = E_phi(A_t)
 ```
 
-The autoencoder is action-only. It must not use VLM tokens, language tokens,
-state, or memory. Its role is to define a latent space for 32-step action
-chunks.
+The autoencoder must not use VLM tokens, language tokens, state, or memory. Its role is only to define a compact latent space for 32-step action chunks.
 
 The active H32 target contract is:
 
@@ -64,28 +51,18 @@ action_segment_mask: [B, 1]
 
 ## Planner Objective
 
-The planner receives current VLM tokens and robot state:
-
 ```text
-P_t = f_plan(H_t_vlm, s_t)
+P_t = f_plan(H_t, s_t)
 z_hat_t = W_z P_t
-```
-
-Training uses the frozen autoencoder for supervision:
-
-```text
 L_z = ||z_hat_t - z_t*||_2^2
 A_hat_t = D_theta(z_hat_t)
 L_chunk = rec(A_hat_t, A_t)
 L_planner = lambda_z * L_z + lambda_A * L_chunk
 ```
 
-The latent head and frozen decoder are training-time shaping tools. Inference
-uses only the plan token.
+The latent head and frozen decoder are training-time shaping tools. Inference uses only the plan token.
 
 ## Inference Contract
-
-The intended integration contract is:
 
 ```text
 P_t = f_plan(H_t_vlm, s_t)       # [B, 1, D]
@@ -93,13 +70,11 @@ H_t_bridge = BridgeAttention(H_t_vlm, s_t, P_t, M_t)
 ActionHead(H_t_bridge, s_t)      # predicts a 32-step action chunk
 ```
 
-There is no plan cache key and no requested/consumed control-step bookkeeping in
-the H32 planner path.
+There is no plan cache key and no requested/consumed control-step bookkeeping in this path.
 
-## Data And Training Notes
+## Data And Training
 
-The full feature cache stores VLM tokens, state, and action targets. The AE
-training path uses a derived action-only cache to avoid loading VLM features:
+The full feature cache stores VLM tokens, state, and action targets. The AE training path uses a derived action-only cache to avoid loading VLM features:
 
 ```text
 libero_h32_single_token_s32768_seed42
@@ -113,9 +88,6 @@ training.shuffle_mode: shard
 data.shard_cache_size: 32
 ```
 
-This preserves useful randomization without requiring the whole feature cache to
-live in CPU memory.
-
 ## Active Configs
 
 ```text
@@ -124,12 +96,11 @@ coarse_planner/configs/libero_h32_intent_ae_v1.yaml
 coarse_planner/configs/libero_h32_single_token_planner_v1.yaml
 ```
 
-The current best metric for planner checkpoint selection is:
+Checkpoint selection uses `val_raw_latent_mse`. The current best checkpoint is epoch 52 from `$AUTODL_TMP/runs/coarse_planner/libero_h32_single_token_planner_v1/best.pt`.
 
-```text
-val_raw_latent_mse
-```
+## Integration Rules
 
-Training should stop when the explicit wall-clock deadline expires. The final
-checkpoint choice should still use the best validation checkpoint, not the last
-epoch by default.
+- The integrated model should consume exactly one plan token.
+- The ActionHead horizon should remain 32 for this path.
+- The planner should not read memory in this version.
+- BridgeAttention / ActionHead training should decide whether the token is useful before any memory rewrite is added.

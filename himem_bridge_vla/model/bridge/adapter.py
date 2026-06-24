@@ -92,6 +92,7 @@ class BridgeAdapter(nn.Module):
         plan_tokens: torch.Tensor | None = None,
         plan_token_mask: torch.Tensor | None = None,
         memory_context: torch.Tensor | None = None,
+        memory_context_mask: torch.Tensor | None = None,
     ) -> BridgeAdapterOutput:
         fused_tokens = _ensure_rank3(fused_tokens, "fused_tokens")
         batch_size = fused_tokens.shape[0]
@@ -109,6 +110,7 @@ class BridgeAdapter(nn.Module):
             plan_tokens=plan_tokens,
             plan_token_mask=plan_token_mask,
             memory_context=memory_context,
+            memory_context_mask=memory_context_mask,
             device=device,
         )
         memory_context = self._project_memory(memory_context, device, dtype)
@@ -197,6 +199,7 @@ class BridgeAdapter(nn.Module):
         plan_tokens: torch.Tensor | None,
         plan_token_mask: torch.Tensor | None,
         memory_context: torch.Tensor | None,
+        memory_context_mask: torch.Tensor | None,
         device: torch.device,
     ) -> torch.Tensor | None:
         masks = [
@@ -217,7 +220,16 @@ class BridgeAdapter(nn.Module):
         if memory_context is not None:
             memory_context = _ensure_rank3(memory_context, "memory_context")
             if memory_context.shape[1] > 0:
-                masks.append(torch.zeros(batch_size, memory_context.shape[1], dtype=torch.bool, device=device))
+                if memory_context_mask is None:
+                    masks.append(torch.zeros(batch_size, memory_context.shape[1], dtype=torch.bool, device=device))
+                else:
+                    memory_context_mask = memory_context_mask.to(device=device).bool()
+                    if memory_context_mask.shape != memory_context.shape[:2]:
+                        raise ValueError(
+                            f"memory_context_mask shape {tuple(memory_context_mask.shape)} must match "
+                            f"memory context prefix {tuple(memory_context.shape[:2])}"
+                        )
+                    masks.append(~memory_context_mask)
         if not masks:
             return None
         merged = torch.cat(masks, dim=1)

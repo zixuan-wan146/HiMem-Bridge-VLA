@@ -60,9 +60,6 @@ def obs_to_json_dict(
     obs,
     prompt,
     resize_size=448,
-    *,
-    episode_id: str | None = None,
-    session_id: str | None = None,
 ):
     img = np.ascontiguousarray(obs["agentview_image"][::-1, ::-1])
     wrist_img = np.ascontiguousarray(obs["robot0_eye_in_hand_image"][::-1, ::-1])
@@ -83,10 +80,6 @@ def obs_to_json_dict(
         "image_mask": [1, 1, 0],
         "action_mask": [1] * 7 + [0] * 17,
     }
-    if episode_id is not None:
-        data["episode_id"] = episode_id
-    if session_id is not None:
-        data["session_id"] = session_id
     return data
 
 # ========= Get the environment of LIBERO =========
@@ -183,8 +176,6 @@ async def run(SERVER_URL: str, max_steps: int = None, num_episodes: int = None, 
                         send_data = obs_to_json_dict(
                             obs,
                             prompt,
-                            episode_id=episode_key,
-                            session_id=args.ckpt_name,
                         )
                         await ws.send(json.dumps(send_data))
                         log.debug(f"[Step {step}] Send observation")

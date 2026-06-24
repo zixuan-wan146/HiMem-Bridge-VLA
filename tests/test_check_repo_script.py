@@ -35,16 +35,21 @@ def test_check_repo_dry_run_lists_default_gates():
     output = result.stdout + result.stderr
     assert "DRY-RUN Requirements policy audit:" in output
     assert "DRY-RUN Runtime environment check:" in output
+    assert "Skipping training smoke tests; set HIMEM_CHECK_INCLUDE_TRAINING=1 to include them" in output
     assert "DRY-RUN Unit tests:" in output
+    assert "--ignore=tests/test_memory_token_cache_adapter.py" in output
     assert "Skipping ruff because HIMEM_CHECK_SKIP_RUFF=1" in output
     assert "DRY-RUN shell syntax:" in output
     assert "DRY-RUN Repository preflight:" in output
     assert "DRY-RUN Bridge-HiMem config validation:" in output
     assert "DRY-RUN Training config validation:" in output
+    assert "DRY-RUN Benchmark inventory:" in output
     assert "DRY-RUN LIBERO setup dry-run:" in output
     assert "DRY-RUN LIBERO checkpoint download dry-run:" in output
     assert "DRY-RUN LIBERO smoke profile dry-run:" in output
     assert "DRY-RUN LIBERO eval profile dry-run:" in output
+    assert "DRY-RUN RMBench eval dry-run:" in output
+    assert "DRY-RUN RMBench eval plan-only:" in output
     assert "DRY-RUN Python compileall:" in output
     assert "DRY-RUN Git whitespace check:" in output
     assert str(REPO_ROOT) not in output
@@ -72,4 +77,17 @@ def test_check_repo_dry_run_accepts_python_override():
 
     assert result.returncode == 0, result.stderr
     output = result.stdout + result.stderr
-    assert f"DRY-RUN Unit tests: {python_name} -m pytest" in output
+    assert (
+        f"DRY-RUN Unit tests: {python_name} -m pytest --ignore=tests/test_memory_token_cache_adapter.py"
+        in output
+    )
+
+
+def test_check_repo_dry_run_can_include_training_smoke_tests():
+    result = run_dry_run({"HIMEM_CHECK_INCLUDE_TRAINING": "1"})
+
+    assert result.returncode == 0, result.stderr
+    output = result.stdout + result.stderr
+    assert "Skipping training smoke tests" not in output
+    assert "DRY-RUN Unit tests:" in output
+    assert "--ignore=tests/test_memory_token_cache_adapter.py" not in output

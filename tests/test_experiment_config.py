@@ -17,7 +17,7 @@ def test_resolve_experiment_config_loads_bridge_yaml_and_sets_seed():
     assert resolved["experiment_config_resolved"] is True
     assert resolved["seed"] == 42
     assert resolved["use_bridge"] is True
-    assert resolved["use_himem"] is True
+    assert resolved["use_memory"] is True
     assert resolved["bridge_variant"] == "crosskv"
     assert resolved["bridge_himem"]["experiment_name"] == "crosskv_clean"
     assert resolved["bridge_himem_config_path"] == str(config_path)

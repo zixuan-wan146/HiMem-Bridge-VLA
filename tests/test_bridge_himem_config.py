@@ -19,13 +19,14 @@ class BridgeHiMemConfigTests(unittest.TestCase):
 
         self.assertEqual(config.experiment_name, "crosskv_clean")
         self.assertTrue(legacy["use_bridge"])
-        self.assertTrue(legacy["use_himem"])
+        self.assertTrue(legacy["use_memory"])
         self.assertEqual(legacy["bridge_variant"], "crosskv")
-        self.assertEqual(legacy["memory_placement"], "crosskv")
+        self.assertEqual(legacy["memory_kind"], "dual_fifo_visual")
+        self.assertEqual(legacy["memory_short_offsets"], [32, 16])
+        self.assertEqual(legacy["memory_entry_tokens"], 1)
         self.assertEqual(legacy["bridge_raw_layers"], [3, 7, 11, 14])
         self.assertFalse(legacy["allow_image_token_truncation"])
         self.assertEqual(legacy["bridge_context_mode"], "bridge_clean")
-        self.assertEqual(legacy["memory_write_tokens"], 4)
 
     def test_all_repository_bridge_himem_yamls_are_valid(self):
         self._import_or_skip("yaml")
@@ -60,7 +61,7 @@ class BridgeHiMemConfigTests(unittest.TestCase):
         self.assertEqual(config.bridge.variant, "mixed_latent")
         self.assertTrue(config.memory.enabled)
         self.assertTrue(config.skill.enabled)
-        self.assertEqual(config.memory.writer.num_tokens, 4)
+        self.assertEqual(config.memory.compression.entry_tokens, 1)
 
     def test_nested_mapping_is_supported(self):
         config_module = self._import_or_skip("himem_bridge_vla.bridge_himem_config")
@@ -80,11 +81,11 @@ class BridgeHiMemConfigTests(unittest.TestCase):
                     "context": {"mode": "bridge_clean"},
                     "memory": {
                         "enabled": True,
-                        "placement": "mixed_latent",
-                        "token_dim": 8,
-                        "bank_max_tokens": 4,
-                        "read_top_k": 2,
-                        "writer": {"num_tokens": 2, "num_heads": 2},
+                        "hidden_dim": 8,
+                        "views": ["base", "wrist"],
+                        "short": {"capacity": 2, "offsets": [32, 16]},
+                        "long": {"capacity": 4},
+                        "compression": {"entry_tokens": 2, "num_heads": 2},
                     },
                 }
             }
@@ -154,28 +155,25 @@ class BridgeHiMemConfigTests(unittest.TestCase):
                 }
             )
 
-    def test_memory_requires_bridge(self):
+    def test_memory_hidden_dim_must_match_vlm_hidden_dim(self):
         config_module = self._import_or_skip("himem_bridge_vla.bridge_himem_config")
 
-        with self.assertRaisesRegex(ValueError, "requires bridge"):
+        with self.assertRaisesRegex(ValueError, "memory.hidden_dim"):
             config_module.BridgeHiMemConfig.from_mapping(
                 {
                     "vlm": {"hidden_dim": 8},
-                    "bridge": {"enabled": False, "num_heads": 2},
-                    "memory": {"enabled": True, "token_dim": 8},
+                    "memory": {"enabled": True, "hidden_dim": 16},
                 }
             )
 
-    def test_memory_placement_must_match_variant(self):
+    def test_memory_short_offsets_must_match_capacity(self):
         config_module = self._import_or_skip("himem_bridge_vla.bridge_himem_config")
 
-        with self.assertRaisesRegex(ValueError, "memory.placement must match"):
+        with self.assertRaisesRegex(ValueError, "offsets length"):
             config_module.BridgeHiMemConfig.from_mapping(
                 {
                     "vlm": {"hidden_dim": 8},
-                    "bridge": {"enabled": True, "variant": "crosskv", "num_heads": 2},
-                    "context": {"mode": "bridge_clean"},
-                    "memory": {"enabled": True, "placement": "mixed_latent", "token_dim": 8},
+                    "memory": {"enabled": True, "hidden_dim": 8, "short": {"capacity": 2, "offsets": [16]}},
                 }
             )
 

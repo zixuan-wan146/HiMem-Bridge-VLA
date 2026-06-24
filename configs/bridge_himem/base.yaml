@@ -28,19 +28,19 @@ context:
 
 memory:
   enabled: false
-  placement: crosskv
-  token_dim: 896
-  bank_max_tokens: 64
-  read_top_k: 8
-  write_threshold: 0.5
-  writer:
-    num_tokens: 4
+  kind: dual_fifo_visual
+  hidden_dim: 896
+  views: [base, wrist]
+  short:
+    capacity: 2
+    offsets: [32, 16]
+  long:
+    capacity: 4
+  compression:
+    entry_tokens: 1
     num_heads: 8
     dropout: 0.0
-  segment:
-    accumulator: ema
-    ema_decay: 0.9
-    write_policy: boundary
+    max_age_steps: 512
 
 skill:
   enabled: false

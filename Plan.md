@@ -1,53 +1,46 @@
 # HiMem-Bridge-VLA Current Plan
 
-This workspace is the active project for BridgeAttention + HiMem VLA experiments.
-Any older sibling checkout should be treated as a legacy reference until it is explicitly archived or deleted.
+This checkout is the active project for BridgeAttention + H32 single-token coarse planner work. Older transition-trigger and H64 suffix-planner designs have been retired from the active roadmap.
+
+## Active Goal
+
+Promote the H32 standalone planner into BridgeAttention / ActionHead training without reintroducing cached suffix queues or transition-trigger refresh logic.
+
+```text
+H_t, s_t -> CoarsePlanner -> one plan token P_t -> BridgeAttention -> FlowMatchingActionHead -> 32-step action chunk
+```
+
+## Current State
+
+- H32 feature cache is built on the remote data disk.
+- H32 action-only intent AE is trained.
+- H32 single-token planner is trained to the current best checkpoint.
+- Old H64 planner configs/checkpoints and transition-trigger active code paths have been removed.
+- Memory work is now a separate Dual-FIFO visual-memory track. The active step is memory-side inference construction, not BridgeAttention integration.
 
 ## Active Entry Points
 
-- Design: `docs/bridge_himem_design.md`
-- Engineering boundaries: `docs/project_structure.md`
-- Bridge-HiMem configs: `configs/bridge_himem/base.yaml` and `configs/bridge_himem/experiments/*.yaml`
-- Training: `scripts/train.py`
-- Model composition: `himem_bridge_vla/model/himem_bridge_vla.py`
-- Local quality gate: `scripts/check_repo.sh`
-
-## Current Experiment Matrix
-
-- `baseline.yaml`: fused-token baseline, no bridge, no memory. This is a control, not a target model.
-- `crosskv_clean.yaml`: target route A; memory enters BridgeAttention as cross-attention K/V.
-- `mixed_latent_clean.yaml`: target route B; memory is appended to action-head context tokens.
-- `mixed_latent_skill.yaml`: target route B plus learnable skill tokens.
-
-All experiment YAML files inherit `configs/bridge_himem/base.yaml`. New experiments should only
-override the fields that define the experimental difference.
-
-## Initialization Decision Point
-
-If a compatible Evo VLA checkpoint is available, prefer using it as the shared initialization for
-all finetuning branches:
-
 ```text
-Evo checkpoint
-  -> baseline.yaml control
-  -> crosskv_clean.yaml
-  -> mixed_latent_clean.yaml / mixed_latent_skill.yaml
+docs/current_project_state.md   detailed state, artifacts, metrics, next work
+docs/engineering_reproducibility.md reproducibility and engineering gates
+docs/benchmark_plan.md          LIBERO / LIBERO-Plus / RMBench status and next work
+docs/coarse_planner_design.md   H32 planner target and training contract
+docs/bridge_himem_design.md     BridgeAttention integration contract
+docs/project_structure.md       code/config/docs/output boundaries
+coarse_planner/README.md        standalone cache, AE, and planner commands
 ```
 
-If the Evo checkpoint only contains the original VLM/action-head stack, add a partial pretrain
-loader before training Bridge/HiMem variants. The current strict DeepSpeed resume path expects
-matching module keys and is only suitable for checkpoints from the same model architecture.
+## Next Engineering Work
 
-## Reproducibility Rules
+1. Keep the current H32 best planner checkpoint as the standalone planner baseline.
+2. Update BridgeAttention / ActionHead training data to consume one H32 plan token.
+3. Train the joint BridgeAttention / ActionHead path with the planner token enabled.
+4. Evaluate against fused-only and bridge-clean baselines.
+5. Keep BridgeAttention memory integration separate until the memory-side inference path is tested.
 
-- Run configs through `python3 scripts/validate_bridge_himem_configs.py` before training.
-- Training writes `resolved_config.json` and `reproducibility.json` into `save_dir`.
-- Use the run directory snapshot as the source of truth for reproduced runs, not the raw YAML alone.
-- Keep large outputs, datasets, checkpoints, and model caches off the system disk on the server.
+## Guardrails
 
-## Cleanup Policy
-
-- Generated caches such as `__pycache__/`, `.pytest_cache/`, logs, checkpoints, and run outputs are
-  ignored and may be deleted locally.
-- Do not delete any sibling legacy checkout until it is intentionally archived or removed, because it may
-  contain a separate `.git` history.
+- Do not restart transition-trigger work for this H32 path.
+- Do not reintroduce PlanTokenQueue, consumed-step suffix state, or cached plan refresh policy.
+- Do not wire memory into BridgeAttention before the memory-side inference path is tested.
+- Keep large datasets, caches, checkpoints, and run outputs off the system disk.

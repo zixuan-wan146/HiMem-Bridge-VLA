@@ -11,7 +11,6 @@ context:
 
 memory:
   enabled: false
-  placement: crosskv
 
 coarse_planner:
   enabled: true

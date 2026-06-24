@@ -756,8 +756,6 @@ def train(config):
             modules_to_inspect["bridge_adapter"] = unwrapped_model.bridge_adapter
         if unwrapped_model.coarse_planner is not None:
             modules_to_inspect["coarse_planner"] = unwrapped_model.coarse_planner
-        if unwrapped_model.memory_writer is not None:
-            modules_to_inspect["memory_writer"] = unwrapped_model.memory_writer
         inspect_named_submodules(modules_to_inspect)
 
     segment_autoencoder = load_action_segment_autoencoder(

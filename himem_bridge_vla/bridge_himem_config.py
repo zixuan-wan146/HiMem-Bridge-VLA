@@ -7,9 +7,7 @@ from typing import Any, Mapping
 
 BRIDGE_VARIANTS = {"crosskv", "mixed_latent"}
 CONTEXT_MODES = {"fused_only", "bridge_clean", "bridge_residual", "bridge_gated_residual"}
-MEMORY_PLACEMENTS = {"crosskv", "mixed_latent"}
-SEGMENT_ACCUMULATORS = {"none", "ema"}
-WRITE_POLICIES = {"boundary", "always"}
+MEMORY_KINDS = {"dual_fifo_visual"}
 ACTION_QUERY_SOURCES = {"learned_bridge"}
 COARSE_PLANNER_TYPES = {"query_cross_attention"}
 COARSE_PLANNER_LOSSES = {"intent_latent"}
@@ -50,29 +48,33 @@ class ContextConfig:
 
 
 @dataclass(frozen=True)
-class MemoryWriterConfig:
-    num_tokens: int = 4
-    num_heads: int = 8
-    dropout: float = 0.0
+class ShortMemoryConfig:
+    capacity: int = 2
+    offsets: tuple[int, ...] = (32, 16)
 
 
 @dataclass(frozen=True)
-class SegmentConfig:
-    accumulator: str = "ema"
-    ema_decay: float = 0.9
-    write_policy: str = "boundary"
+class LongMemoryConfig:
+    capacity: int = 4
+
+
+@dataclass(frozen=True)
+class MemoryCompressionConfig:
+    entry_tokens: int = 1
+    num_heads: int = 8
+    dropout: float = 0.0
+    max_age_steps: int = 512
 
 
 @dataclass(frozen=True)
 class MemoryConfig:
     enabled: bool = False
-    placement: str = "crosskv"
-    token_dim: int = 896
-    bank_max_tokens: int = 64
-    read_top_k: int = 8
-    write_threshold: float = 0.5
-    writer: MemoryWriterConfig = field(default_factory=MemoryWriterConfig)
-    segment: SegmentConfig = field(default_factory=SegmentConfig)
+    kind: str = "dual_fifo_visual"
+    hidden_dim: int = 896
+    views: tuple[str, ...] = ("base", "wrist")
+    short: ShortMemoryConfig = field(default_factory=ShortMemoryConfig)
+    long: LongMemoryConfig = field(default_factory=LongMemoryConfig)
+    compression: MemoryCompressionConfig = field(default_factory=MemoryCompressionConfig)
 
 
 @dataclass(frozen=True)
@@ -174,33 +176,28 @@ class BridgeHiMemConfig:
         if self.context.mode not in CONTEXT_MODES:
             raise ValueError(f"context.mode must be one of {sorted(CONTEXT_MODES)}")
 
-        if self.memory.placement not in MEMORY_PLACEMENTS:
-            raise ValueError(f"memory.placement must be one of {sorted(MEMORY_PLACEMENTS)}")
-        _positive_int(self.memory.token_dim, "memory.token_dim")
-        _positive_int(self.memory.bank_max_tokens, "memory.bank_max_tokens")
-        _positive_int(self.memory.read_top_k, "memory.read_top_k")
-        if not 0.0 <= float(self.memory.write_threshold) <= 1.0:
-            raise ValueError("memory.write_threshold must be in [0, 1]")
-        _positive_int(self.memory.writer.num_tokens, "memory.writer.num_tokens")
-        _positive_int(self.memory.writer.num_heads, "memory.writer.num_heads")
-        _non_negative_float(self.memory.writer.dropout, "memory.writer.dropout")
-        if self.vlm.hidden_dim % self.memory.writer.num_heads != 0:
-            raise ValueError("vlm.hidden_dim must be divisible by memory.writer.num_heads")
-        if self.memory.segment.accumulator not in SEGMENT_ACCUMULATORS:
-            raise ValueError(f"memory.segment.accumulator must be one of {sorted(SEGMENT_ACCUMULATORS)}")
-        if self.memory.segment.write_policy not in WRITE_POLICIES:
-            raise ValueError(f"memory.segment.write_policy must be one of {sorted(WRITE_POLICIES)}")
-        if not 0.0 <= float(self.memory.segment.ema_decay) < 1.0:
-            raise ValueError("memory.segment.ema_decay must be in [0, 1)")
+        if self.memory.kind not in MEMORY_KINDS:
+            raise ValueError(f"memory.kind must be one of {sorted(MEMORY_KINDS)}")
+        _positive_int(self.memory.hidden_dim, "memory.hidden_dim")
+        if len(self.memory.views) == 0:
+            raise ValueError("memory.views must contain at least one view")
+        _positive_int(self.memory.short.capacity, "memory.short.capacity")
+        if len(self.memory.short.offsets) != self.memory.short.capacity:
+            raise ValueError("memory.short.offsets length must match memory.short.capacity")
+        for offset in self.memory.short.offsets:
+            _positive_int(offset, "memory.short.offsets")
+        _non_negative_int(self.memory.long.capacity, "memory.long.capacity")
+        _positive_int(self.memory.compression.entry_tokens, "memory.compression.entry_tokens")
+        _positive_int(self.memory.compression.num_heads, "memory.compression.num_heads")
+        _non_negative_float(self.memory.compression.dropout, "memory.compression.dropout")
+        _non_negative_int(self.memory.compression.max_age_steps, "memory.compression.max_age_steps")
+        if self.memory.hidden_dim % self.memory.compression.num_heads != 0:
+            raise ValueError("memory.hidden_dim must be divisible by memory.compression.num_heads")
 
         _positive_int(self.skill.num_tokens, "skill.num_tokens")
 
-        if self.memory.enabled and not self.bridge.enabled:
-            raise ValueError("memory.enabled=true requires bridge.enabled=true")
-        if self.memory.enabled and self.memory.placement != self.bridge.variant:
-            raise ValueError("memory.placement must match bridge.variant for controlled A/B runs")
-        if self.memory.enabled and self.memory.token_dim != self.vlm.hidden_dim:
-            raise ValueError("memory.token_dim must match vlm.hidden_dim in the current runtime")
+        if self.memory.enabled and self.memory.hidden_dim != self.vlm.hidden_dim:
+            raise ValueError("memory.hidden_dim must match vlm.hidden_dim")
         if self.skill.enabled and not self.bridge.enabled:
             raise ValueError("skill.enabled=true requires bridge.enabled=true")
         if self.skill.enabled and self.bridge.variant != "mixed_latent":
@@ -255,7 +252,7 @@ class BridgeHiMemConfig:
     def to_legacy_model_config(self) -> dict[str, Any]:
         legacy: dict[str, Any] = {
             "use_bridge": self.bridge.enabled,
-            "use_himem": self.memory.enabled,
+            "use_memory": self.memory.enabled,
             "bridge_variant": self.bridge.variant,
             "bridge_context_mode": self.context.mode,
             "bridge_fused_gate_init": self.context.fused_gate_init,
@@ -270,16 +267,16 @@ class BridgeHiMemConfig:
             "bridge_dropout": self.bridge.dropout,
             "bridge_raw_gate_init": self.bridge.raw_gate_init,
             "bridge_ffn_mult": self.bridge.ffn_mult,
-            "memory_placement": self.memory.placement,
-            "memory_max_tokens": self.memory.bank_max_tokens,
-            "memory_read_top_k": self.memory.read_top_k,
-            "memory_write_threshold": self.memory.write_threshold,
-            "memory_write_tokens": self.memory.writer.num_tokens,
-            "memory_writer_num_heads": self.memory.writer.num_heads,
-            "memory_writer_dropout": self.memory.writer.dropout,
-            "memory_segment_accumulator": self.memory.segment.accumulator,
-            "memory_segment_ema_decay": self.memory.segment.ema_decay,
-            "memory_write_policy": self.memory.segment.write_policy,
+            "memory_kind": self.memory.kind,
+            "memory_hidden_dim": self.memory.hidden_dim,
+            "memory_views": list(self.memory.views),
+            "memory_short_capacity": self.memory.short.capacity,
+            "memory_short_offsets": list(self.memory.short.offsets),
+            "memory_long_capacity": self.memory.long.capacity,
+            "memory_entry_tokens": self.memory.compression.entry_tokens,
+            "memory_compression_num_heads": self.memory.compression.num_heads,
+            "memory_compression_dropout": self.memory.compression.dropout,
+            "memory_max_age_steps": self.memory.compression.max_age_steps,
             "skill_tokens_enabled": self.skill.enabled,
             "skill_num_tokens": self.skill.num_tokens,
             "coarse_planner_enabled": self.coarse_planner.enabled,
@@ -374,16 +371,16 @@ def _build_memory_config(value: Any) -> MemoryConfig:
     _reject_unknown(mapping, _field_names(MemoryConfig), "memory")
     return MemoryConfig(
         enabled=_bool(mapping.get("enabled", MemoryConfig.enabled), "memory.enabled"),
-        placement=str(mapping.get("placement", MemoryConfig.placement)),
-        token_dim=_int(mapping.get("token_dim", MemoryConfig.token_dim), "memory.token_dim"),
-        bank_max_tokens=_int(mapping.get("bank_max_tokens", MemoryConfig.bank_max_tokens), "memory.bank_max_tokens"),
-        read_top_k=_int(mapping.get("read_top_k", MemoryConfig.read_top_k), "memory.read_top_k"),
-        write_threshold=_float(
-            mapping.get("write_threshold", MemoryConfig.write_threshold),
-            "memory.write_threshold",
+        kind=str(mapping.get("kind", MemoryConfig.kind)),
+        hidden_dim=_int(mapping.get("hidden_dim", MemoryConfig.hidden_dim), "memory.hidden_dim"),
+        views=_coerce_str_tuple(mapping.get("views", MemoryConfig.views), "memory.views"),
+        short=_build_dataclass(ShortMemoryConfig, mapping.get("short", {}), "memory.short"),
+        long=_build_dataclass(LongMemoryConfig, mapping.get("long", {}), "memory.long"),
+        compression=_build_dataclass(
+            MemoryCompressionConfig,
+            mapping.get("compression", {}),
+            "memory.compression",
         ),
-        writer=_build_dataclass(MemoryWriterConfig, mapping.get("writer", {}), "memory.writer"),
-        segment=_build_dataclass(SegmentConfig, mapping.get("segment", {}), "memory.segment"),
     )
 
 
@@ -419,6 +416,11 @@ def _field_names(cls: type) -> set[str]:
 def _positive_int(value: Any, label: str) -> None:
     if _int(value, label) <= 0:
         raise ValueError(f"{label} must be positive")
+
+
+def _non_negative_int(value: Any, label: str) -> None:
+    if _int(value, label) < 0:
+        raise ValueError(f"{label} must be non-negative")
 
 
 def _non_negative_float(value: Any, label: str) -> None:
@@ -459,6 +461,9 @@ def _coerce_field_value(name: str, value: Any, label: str) -> Any:
         "segment_action_dim",
         "num_plan_steps",
         "planning_horizon",
+        "capacity",
+        "entry_tokens",
+        "max_age_steps",
     }:
         return _int(value, label)
     if name in {
@@ -485,12 +490,15 @@ def _coerce_field_value(name: str, value: Any, label: str) -> Any:
         "kind",
         "type",
         "loss",
-        "placement",
         "segment_autoencoder_checkpoint",
     }:
         return str(value)
     if name in {"gripper_indices"}:
         return _coerce_int_tuple(value, label)
+    if name == "offsets":
+        return _coerce_int_tuple(value, label)
+    if name == "views":
+        return _coerce_str_tuple(value, label)
     return value
 
 
@@ -541,6 +549,17 @@ def _coerce_int_tuple(value: Any, label: str) -> tuple[int, ...]:
         except TypeError as exc:
             raise ValueError(f"{label} must be a sequence of integers") from exc
     return tuple(_int(item, label) for item in values)
+
+
+def _coerce_str_tuple(value: Any, label: str) -> tuple[str, ...]:
+    if isinstance(value, str):
+        values = (value,)
+    else:
+        try:
+            values = tuple(value)
+        except TypeError as exc:
+            raise ValueError(f"{label} must be a sequence of strings") from exc
+    return tuple(str(item) for item in values)
 
 
 def _validate_action_indices(indices: tuple[int, ...], action_dim: int, label: str) -> None:

@@ -82,6 +82,60 @@ class BridgeAttentionTests(unittest.TestCase):
 
         self.assertEqual(tuple(output.bridge_tokens.shape), (2, 4, 8))
 
+    def test_bridge_adapter_accepts_memory_context_mask(self):
+        torch = self._import_or_skip("torch")
+        bridge = self._import_or_skip("himem_bridge_vla.model.bridge")
+
+        adapter = bridge.BridgeAdapter(
+            bridge.BridgeAdapterConfig(
+                embed_dim=8,
+                raw_dim=8,
+                state_dim=3,
+                num_layers=1,
+                num_heads=2,
+                num_bridge_tokens=4,
+                num_action_queries=5,
+            )
+        )
+        output = adapter(
+            torch.randn(2, 6, 8),
+            hidden_states=[torch.randn(2, 6, 8)],
+            state=torch.randn(2, 3),
+            memory_context=torch.randn(2, 3, 8),
+            memory_context_mask=torch.tensor(
+                [
+                    [True, False, False],
+                    [True, True, False],
+                ]
+            ),
+        )
+
+        self.assertEqual(tuple(output.bridge_tokens.shape), (2, 4, 8))
+
+    def test_bridge_adapter_rejects_bad_memory_context_mask_shape(self):
+        torch = self._import_or_skip("torch")
+        bridge = self._import_or_skip("himem_bridge_vla.model.bridge")
+
+        adapter = bridge.BridgeAdapter(
+            bridge.BridgeAdapterConfig(
+                embed_dim=8,
+                raw_dim=8,
+                state_dim=3,
+                num_layers=1,
+                num_heads=2,
+                num_bridge_tokens=4,
+                num_action_queries=5,
+            )
+        )
+        with self.assertRaisesRegex(ValueError, "memory_context_mask"):
+            adapter(
+                torch.randn(2, 6, 8),
+                hidden_states=[torch.randn(2, 6, 8)],
+                state=torch.randn(2, 3),
+                memory_context=torch.randn(2, 3, 8),
+                memory_context_mask=torch.ones(2, 2, dtype=torch.bool),
+            )
+
     def _import_or_skip(self, module_name):
         try:
             return __import__(module_name, fromlist=["*"])

@@ -1,9 +1,8 @@
 # Standalone Coarse Planner
 
-This package is the standalone training/evaluation path for the Coarse Planner
-before it is attached to the full HiMem-Bridge-VLA training loop.
+This package contains the standalone data, training, and evaluation path for the H32 single-token Coarse Planner before it is attached to the full HiMem-Bridge-VLA training loop.
 
-The active LIBERO path is H32 single-token intent planning:
+## Active Path
 
 ```text
 cache VLM tokens and robot state
@@ -15,27 +14,29 @@ evaluate latent MSE, decoded chunk quality, and cosine similarity
 use the single plan token at inference/integration time
 ```
 
-The old compressed coarse-action target and the H64 multi-token/suffix queue path
-are deprecated and should not be used for new experiments.
+The old compressed coarse-action target and H64 multi-token suffix queue path are retired.
 
-## Current Active Artifacts
+## Current Contract
 
-Datasets on the remote data disk:
+```text
+planning_horizon: 32
+num_plan_steps: 1
+chunk_size: 32
+action_segments: [B, 1, 32, 7]
+action_segment_mask: [B, 1]
+planner output: [B, 1, D]
+```
+
+## Active Artifacts
 
 ```text
 ../datasets/coarse_planner/libero_h32_single_token_s32768_seed42
-```
-
-Checkpoints/runs:
-
-```text
+../datasets/coarse_planner/libero_h32_single_token_s32768_seed42_action_only
 ../runs/coarse_planner/libero_h32_intent_ae_v1
 ../runs/coarse_planner/libero_h32_single_token_planner_v1
 ```
 
 ## Active Configs
-
-Use these configs for the current LIBERO H32 single-token path:
 
 ```text
 coarse_planner/configs/libero_h32_single_token_build.yaml
@@ -43,95 +44,27 @@ coarse_planner/configs/libero_h32_intent_ae_v1.yaml
 coarse_planner/configs/libero_h32_single_token_planner_v1.yaml
 ```
 
-## Feature Cache Format
-
-The planner feature cache is sharded:
-
-```text
-manifest.json
-train/planner_samples_00000.pt
-eval/planner_samples_00001.pt
-```
-
-Each sample contains:
-
-```text
-vlm_tokens
-state
-action_segments
-action_segment_mask
-```
-
-For LIBERO H32 single-token planning, the important target contract is:
-
-```text
-planning_horizon: 32
-num_plan_steps: 1
-chunk_size: 32
-gripper_indices: [6]
-```
-
 ## Common Commands
 
-Build the 32k LIBERO H32 cache:
-
 ```bash
-python -m coarse_planner.build_from_libero \
-  --config coarse_planner/configs/libero_h32_single_token_build.yaml \
-  --device cuda
-```
-
-Train the H32 intent AE:
-
-```bash
-python -m coarse_planner.train_segment_autoencoder \
-  --config coarse_planner/configs/libero_h32_intent_ae_v1.yaml \
-  --device cuda
-```
-
-Train the H32 single-token planner:
-
-```bash
-python -m coarse_planner.train \
-  --config coarse_planner/configs/libero_h32_single_token_planner_v1.yaml \
-  --device cuda
+python -m coarse_planner.build_from_libero --config coarse_planner/configs/libero_h32_single_token_build.yaml --device cuda
+python -m coarse_planner.extract_fields_cache --source ../datasets/coarse_planner/libero_h32_single_token_s32768_seed42 --output ../datasets/coarse_planner/libero_h32_single_token_s32768_seed42_action_only --fields action_segments action_segment_mask
+python -m coarse_planner.train_segment_autoencoder --config coarse_planner/configs/libero_h32_intent_ae_v1.yaml --device cuda
+python -m coarse_planner.train --config coarse_planner/configs/libero_h32_single_token_planner_v1.yaml --device cuda
 ```
 
 ## Current Metrics
 
 ```text
-H32 intent AE:
-  best epoch:     99
-  val_loss:       0.0137875769
-  val_rec_loss:   0.0123513332
-  val_dist_loss:  0.0143624358
-
-H32 single-token planner:
-  training stopped at the 2026-06-22 04:45 wall-clock deadline
-  checkpoint selection metric: val_raw_latent_mse
-  best epoch:     52
-  best raw MSE:   0.0869378231
-  best val loss:  0.2716650516
-  best cosine:    0.9047680597
-  last epoch:     60
-  last raw MSE:   0.0878419157
+H32 intent AE: best epoch 99, val_loss 0.0137875769
+H32 planner:   best epoch 52, raw MSE 0.0869378231, val loss 0.2716650516, cosine 0.9047680597
 ```
 
-## Notes
+## Integration Rule
 
-Detailed design and experiment records live in:
-
-```text
-docs/coarse_planner_design.md
-docs/action_segment_autoencoder_coarse_planner_config.md
-docs/current_project_state.md
-```
-
-The next training stage is not more standalone planner fine-tuning by default.
-BridgeAttention / ActionHead joint training is deferred until the memory rewrite
-direction is settled.
+The next stage is not more same-family standalone fine-tuning by default. The useful next experiment is BridgeAttention / ActionHead joint training with exactly one H32 plan token:
 
 ```text
-P_t = f_plan(H_t, s_t)       # shape [B, 1, D]
+P_t = f_plan(H_t, s_t)       # [B, 1, D]
 ActionHead(H_t, s_t, P_t)    # predicts a 32-step action chunk
 ```
