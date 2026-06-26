@@ -1,6 +1,6 @@
 # HiMem-Bridge-VLA
 
-This repository contains the active HiMem VLA progress-state planner work built around an InternVL3 embedder. The current design work is scoped to progress-state planner warmup.
+This repository contains the active HiMem VLA work built around an InternVL3 embedder, a progress-state planner, short visual-token memory, and a direct bridge-attn flow-matching action head.
 
 The current research direction separates short and long memory by function:
 
@@ -13,7 +13,7 @@ The previous H64 suffix planner and transition-trigger refresh design remains re
 
 ## Current Contract
 
-The new target contract is:
+The active contract is:
 
 ```text
 H = 32
@@ -22,6 +22,8 @@ S_t = ShortVisualMemory(V_{t-R/2}, V_{t-R})
 x_t = ProgressEvidenceEncoder(h_t, s_t, u_t)
 M_t = ProgressStateUpdater(M_{t-1}, x_t)
 P_t = Planner(M_t, h_t, s_t)
+P_t -> 8 virtual plan slots
+32 noisy action tokens -> DirectBridgeActionHead
 ```
 
 Where:
@@ -31,6 +33,13 @@ S_t: short visual memory tokens
 M_t: long-term task-progress state tokens
 P_t: planner intent token
 u_t: summary of the executed R-step action segment since the last replan
+```
+
+The direct bridge action head reads two functional context branches:
+
+```text
+visual evidence: [current VLM hidden states, short memory]
+action condition: [plan slots, state token]
 ```
 
 The existing H32 action-latent planner artifacts are now treated as baseline / warm-start assets, not as the main planner definition.
@@ -45,7 +54,8 @@ docs/progress_state_planner_design_zh.md      Current long-memory and planner de
 docs/project_structure.md                     Ownership boundaries and output locations
 docs/engineering_reproducibility.md           Engineering and reproducibility contract
 docs/benchmark_plan.md                        LIBERO / LIBERO-Plus / RMBench status
-docs/bridge_himem_design.md                   Progress-state planner surface
+docs/bridge_himem_design.md                   Active progress planner + direct bridge model path
+docs/direct_bridge_attention_design_zh.md     Direct bridge-attn action-head design
 coarse_planner/README.md                      Legacy H32 baseline data/training/eval path
 configs/README.md                             Checked-in config rules
 scripts/README.md                             Script entry points
@@ -61,6 +71,8 @@ evaluations/libero/ LIBERO client, action protocol, result handling
 evaluations/rmbench/ RMBench adapter and eval-planning helpers
 scripts/            training, server, checks, LIBERO/RMBench tooling
 tests/              lightweight tests that avoid downloading model weights
+referen-repo/       historical tracked reference repositories; kept in place to avoid churn
+reference-repo/     newly added source-only external references, such as VLA-Adapter
 ```
 
 Large datasets, model caches, checkpoints, and run outputs stay outside git on the remote data disk. On AutoDL this project uses `$AUTODL_TMP` as the data and run root.

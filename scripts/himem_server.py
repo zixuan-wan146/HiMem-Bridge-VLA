@@ -56,7 +56,7 @@ def load_checkpoint_payload(ckpt_path: Path, *, allow_unsafe_checkpoint_load: bo
 def load_model_and_normalizer(
     ckpt_dir,
     device: str = "cuda",
-    inference_steps: int = 32,
+    inference_steps: int = 15,
     allow_unsafe_checkpoint_load: bool = False,
 ):
     device = resolve_device(device)
@@ -183,7 +183,7 @@ def parse_args():
     parser.add_argument("--host", default=DEFAULT_SERVER_HOST)
     parser.add_argument("--port", type=int, default=DEFAULT_SERVER_PORT)
     parser.add_argument("--device", default="cuda")
-    parser.add_argument("--inference_steps", type=int, default=32)
+    parser.add_argument("--inference_steps", type=int, default=15)
     parser.add_argument(
         "--allow_unsafe_checkpoint_load",
         action="store_true",

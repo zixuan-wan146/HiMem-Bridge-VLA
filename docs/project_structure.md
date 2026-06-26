@@ -18,6 +18,8 @@ evaluations/rmbench/       RMBench policy adapter 和 eval plan helpers
 scripts/                  train/server/repo gate、preflight、下载、评估编排、报告工具
 tests/                    轻量单测，不下载模型权重
 docs/                     当前设计说明和工程约定
+referen-repo/             历史已跟踪 reference repositories，保留原路径避免大规模 rename
+reference-repo/           新增 source-only 外部参考快照，例如 VLA-Adapter
 ```
 
 大产物不进 git，统一放在远端数据盘：
@@ -41,6 +43,8 @@ docs/progress_state_planner_design_zh.md
 docs/engineering_reproducibility.md
 docs/benchmark_plan.md
 docs/bridge_himem_design.md
+docs/direct_bridge_attention_design_zh.md
+docs/vla_adapter_bridge_attention_notes_zh.md
 coarse_planner/README.md
 configs/README.md
 scripts/README.md
@@ -64,7 +68,7 @@ scripts/README.md
 - `model/himem`：short visual-token memory 相关结构；旧 long visual FIFO 不再作为主线。
 - `model/planner`：新增 progress-state planner、progress state updater、condition builder；legacy `CoarsePlanner` 保留为 baseline。
 - `coarse_planner/`：standalone cache、AE、H32 action-latent baseline 训练和评估。
-- `model/himem_bridge_vla.py`：现有主模型入口；当前设计阶段先实现 progress-state planner warmup，不扩展动作端接口。
+- `model/himem_bridge_vla.py`：主模型入口；direct bridge 模式连接 VLM hidden states、short memory、progress planner plan token、state 和 flow-matching action head。
 - `dataset/action_segments.py`：future action segment 切分和 segment mask。
 - `scripts/himem_server.py`：模型服务和 server protocol；当前路径不加载 transition trigger。
 - `scripts/train.py`：训练流程、日志、checkpoint；新增结构必须通过 config 接入。

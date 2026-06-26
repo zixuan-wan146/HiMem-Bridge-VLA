@@ -13,13 +13,15 @@ if str(REPO_ROOT) not in sys.path:
 
 from himem_bridge_vla.dataset.memory_replay import read_memory_replay_jsonl  # noqa: E402
 from himem_bridge_vla.dataset.memory_token_cache import ImageStatsVisualTokenEncoder  # noqa: E402
+from himem_bridge_vla.dataset.memory_token_cache import ImageStatsVLMHiddenStateEncoder  # noqa: E402
 from himem_bridge_vla.dataset.memory_token_cache import InternVL3VisualTokenEncoder  # noqa: E402
+from himem_bridge_vla.dataset.memory_token_cache import InternVL3VLMHiddenStateEncoder  # noqa: E402
 from himem_bridge_vla.dataset.memory_token_cache import build_memory_replay_token_cache  # noqa: E402
 from himem_bridge_vla.path_utils import display_project_path  # noqa: E402
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Build visual-token shards from a memory replay JSONL index.")
+    parser = argparse.ArgumentParser(description="Build replay-token shards from a memory replay JSONL index.")
     parser.add_argument("--benchmark", required=True, choices=("LIBERO", "RMBench", "rmbench", "libero"))
     parser.add_argument("--data-root", required=True, help="Root used by the replay index source_path values.")
     parser.add_argument("--index", required=True, help="Memory replay JSONL index path.")
@@ -34,6 +36,17 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--view-names", nargs="*", default=None)
     parser.add_argument("--image-stats-hidden-dim", type=int, default=16)
     parser.add_argument("--image-stats-tokens-per-view", type=int, default=1)
+    parser.add_argument(
+        "--include-vlm-hidden-states",
+        action="store_true",
+        help="Also cache current VLM hidden-state token layers for direct bridge raw-layer training.",
+    )
+    parser.add_argument(
+        "--hidden-state-layers",
+        nargs="*",
+        default=("3", "6", "9", "12"),
+        help="Selected VLM hidden-state layers to cache when --include-vlm-hidden-states is set.",
+    )
     parser.add_argument("--dry-run", action="store_true", help="Inspect the index and planned encoder without writing shards.")
     return parser.parse_args(argv)
 
@@ -58,6 +71,8 @@ def main(argv: list[str] | None = None) -> int:
             "index_rows": len(rows),
             "planned_samples": planned_samples,
             "encoder": args.encoder,
+            "include_vlm_hidden_states": bool(args.include_vlm_hidden_states),
+            "hidden_state_layers": [_parse_layer_selector(layer) for layer in args.hidden_state_layers],
             "storage_dtype": args.storage_dtype,
             "max_samples_per_shard": args.max_samples_per_shard,
             "view_names": args.view_names,
@@ -67,12 +82,14 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     encoder = build_encoder(args)
+    hidden_state_encoder = build_hidden_state_encoder(args, encoder=encoder)
     result = build_memory_replay_token_cache(
         benchmark=args.benchmark,
         data_root=args.data_root,
         index_path=index_path,
         output_root=args.output_root,
         encoder=encoder,
+        hidden_state_encoder=hidden_state_encoder,
         view_names=args.view_names,
         max_samples=args.max_samples,
         max_samples_per_shard=args.max_samples_per_shard,
@@ -106,6 +123,36 @@ def build_encoder(args: argparse.Namespace):
         device=args.device,
         storage_dtype=args.storage_dtype,
     )
+
+
+def build_hidden_state_encoder(args: argparse.Namespace, *, encoder):
+    if not args.include_vlm_hidden_states:
+        return None
+    selected_layers = tuple(_parse_layer_selector(layer) for layer in args.hidden_state_layers)
+    if not selected_layers:
+        raise ValueError("--hidden-state-layers must not be empty when --include-vlm-hidden-states is set")
+    if args.encoder == "image_stats":
+        return ImageStatsVLMHiddenStateEncoder(
+            hidden_dim=args.image_stats_hidden_dim,
+            tokens_per_view=args.image_stats_tokens_per_view,
+            selected_layers=selected_layers,
+        )
+    return InternVL3VLMHiddenStateEncoder(
+        model_name=args.model_name,
+        image_size=args.image_size,
+        device=args.device,
+        storage_dtype=args.storage_dtype,
+        selected_layers=selected_layers,
+        embedder=getattr(encoder, "embedder", None),
+    )
+
+
+def _parse_layer_selector(raw: str) -> int | str:
+    text = str(raw)
+    try:
+        return int(text)
+    except ValueError:
+        return text
 
 
 if __name__ == "__main__":

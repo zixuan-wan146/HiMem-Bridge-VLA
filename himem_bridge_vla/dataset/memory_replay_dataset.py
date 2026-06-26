@@ -78,12 +78,15 @@ def memory_replay_sample_to_item(
     return {
         "benchmark": sample.benchmark,
         "episode_id": sample.episode_id,
+        "prompt": sample.prompt,
         "current_step": sample.current_step,
         "current_images": current_images,
         "current_state": np.asarray(sample.current.state_vector, dtype=np.float32),
         "short_images": short_images,
         "short_steps": np.asarray(short_steps, dtype=np.int64),
         "short_mask": np.asarray(sample.short_mask, dtype=bool),
+        "executed_actions": np.asarray(sample.executed_actions, dtype=np.float32),
+        "executed_action_mask": np.asarray(sample.executed_action_mask, dtype=bool),
         "future_actions": np.asarray(sample.future_actions, dtype=np.float32),
         "action_valid_count": int(sample.action_valid_count),
     }
@@ -96,12 +99,18 @@ def collate_memory_replay_frames(batch: Sequence[Mapping[str, Any]]) -> dict[str
     return {
         "benchmark": [str(item["benchmark"]) for item in batch],
         "episode_id": [str(item["episode_id"]) for item in batch],
+        "prompt": [str(item.get("prompt", "")) for item in batch],
         "current_step": torch.tensor([int(item["current_step"]) for item in batch], dtype=torch.long),
         "current_images": [item["current_images"] for item in batch],
         "current_state": torch.tensor(np.stack([item["current_state"] for item in batch]), dtype=torch.float32),
         "short_images": [item["short_images"] for item in batch],
         "short_steps": torch.tensor(np.stack([item["short_steps"] for item in batch]), dtype=torch.long),
         "short_mask": torch.tensor(np.stack([item["short_mask"] for item in batch]), dtype=torch.bool),
+        "executed_actions": torch.tensor(np.stack([item["executed_actions"] for item in batch]), dtype=torch.float32),
+        "executed_action_mask": torch.tensor(
+            np.stack([item["executed_action_mask"] for item in batch]),
+            dtype=torch.bool,
+        ),
         "future_actions": torch.tensor(np.stack([item["future_actions"] for item in batch]), dtype=torch.float32),
         "action_valid_count": torch.tensor([int(item["action_valid_count"]) for item in batch], dtype=torch.long),
     }

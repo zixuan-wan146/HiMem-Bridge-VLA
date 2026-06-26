@@ -164,6 +164,15 @@ def validate_batch_image_masks(image_masks, step: int) -> None:
         )
 
 
+def _optional_batch_tensor(batch: dict, key: str, device: torch.device, dtype: torch.dtype | None):
+    value = batch.get(key)
+    if value is None:
+        return None
+    if dtype is None:
+        return value.to(device=device)
+    return value.to(device=device, dtype=dtype)
+
+
 def encode_batch_embeddings(model, prompts, images_batch, image_masks, *, return_hidden_states: bool):
     fused_tokens_list = []
     hidden_states_per_sample = []
@@ -312,6 +321,17 @@ def custom_collate_fn(batch):
     for optional_key in ("action_segments", "action_segment_mask"):
         if all(optional_key in item for item in batch):
             batch_dict[optional_key] = torch.stack([item[optional_key] for item in batch], dim=0)
+    for optional_key in (
+        "memory_context",
+        "memory_context_mask",
+        "short_memory_time_ids",
+        "executed_actions",
+        "executed_action_mask",
+        "planner_vl_summary",
+        "plan_token_mask",
+    ):
+        if all(optional_key in item for item in batch):
+            batch_dict[optional_key] = torch.stack([item[optional_key] for item in batch], dim=0)
     for optional_key in ("episode_id", "frame_index", "global_frame_index", "segment_id", "segment_start", "segment_end"):
         if all(optional_key in item for item in batch):
             batch_dict[optional_key] = [item[optional_key] for item in batch]
@@ -425,6 +445,16 @@ def prepare_dataset(config: dict) -> torch.utils.data.Dataset:
             use_augmentation=use_augmentation,
             action_segment_config=build_action_segment_dataset_config(config),
         )
+    elif dataset_type == "memory_token_cache":
+        from himem_bridge_vla.dataset import MemoryTokenCacheDataset
+
+        dataset_config_path = project_path(
+            config.get("dataset_config_path"),
+            REPO_ROOT,
+            label="--dataset_config_path",
+        )
+        dataset_config_base_dir = dataset_config_path.parent
+        dataset = MemoryTokenCacheDataset(dataset_config_path, max_samples=max_samples)
     else:
         raise ValueError(f"Unknown dataset_type: {dataset_type}")
     if accelerator is None or accelerator.is_main_process:
@@ -453,9 +483,22 @@ def prepare_dataloader(dataset, config: dict) -> DataLoader:
     batch_size = get_with_warning(config, "batch_size", 8)
     num_workers = get_with_warning(config, "num_workers", 8)
     seed = int(get_with_warning(config, "seed", 42))
+    dataset_type = get_with_warning(config, "dataset_type", "simulation")
 
     if len(dataset) == 0:
         raise ValueError("Dataset is empty. Check dataset_config_path and source data paths.")
+
+    collate_fn = custom_collate_fn
+    if dataset_type == "memory_token_cache":
+        from functools import partial
+
+        from himem_bridge_vla.dataset import collate_direct_bridge_token_cache_samples
+
+        collate_fn = partial(
+            collate_direct_bridge_token_cache_samples,
+            memory_entry_tokens=int(config.get("memory_entry_tokens", 16)),
+            action_horizon=int(config.get("horizon", 32)),
+        )
 
     dataloader = DataLoader(
         dataset,
@@ -465,7 +508,7 @@ def prepare_dataloader(dataset, config: dict) -> DataLoader:
         pin_memory=True,
         persistent_workers=False,
         drop_last=True,
-        collate_fn=custom_collate_fn,
+        collate_fn=collate_fn,
         worker_init_fn=seed_data_worker,
         generator=build_torch_generator(seed),
     )
@@ -768,24 +811,45 @@ def train(config):
         for batch in tqdm(dataloader, desc="Training", disable=not accelerator.is_main_process):
             if step >= max_steps:
                 break
-            prompts = batch["prompts"]
-            images_batch = batch["images"]
-            image_masks = batch["image_masks"]
-            states = batch["states"].to(dtype=torch.bfloat16)
-            actions_gt = batch["actions"].to(dtype=torch.bfloat16)
-            action_mask = batch["action_mask"]
-            embodiment_ids = batch["embodiment_ids"]
-            validate_batch_image_masks(image_masks, step)
-            fused_tokens, hidden_states = encode_batch_embeddings(
-                model,
-                prompts,
-                images_batch,
-                image_masks,
-                return_hidden_states=bridge_enabled,
-            )
+            states = batch["states"].to(device=accelerator.device, dtype=torch.bfloat16)
+            actions_gt = batch["actions"].to(device=accelerator.device, dtype=torch.bfloat16)
+            action_mask = batch["action_mask"].to(device=accelerator.device)
+            embodiment_ids = batch.get("embodiment_ids")
+            if embodiment_ids is not None:
+                embodiment_ids = embodiment_ids.to(device=accelerator.device)
+
+            if "fused_tokens" in batch:
+                fused_tokens = batch["fused_tokens"].to(device=accelerator.device, dtype=torch.bfloat16)
+                raw_hidden_states = batch.get("vlm_hidden_states")
+                hidden_states = None
+                if raw_hidden_states is not None:
+                    hidden_states = [
+                        hidden_state.to(device=accelerator.device, dtype=torch.bfloat16)
+                        for hidden_state in raw_hidden_states
+                    ]
+            else:
+                prompts = batch["prompts"]
+                images_batch = batch["images"]
+                image_masks = batch["image_masks"]
+                if embodiment_ids is None:
+                    raise ValueError("image training batches must include embodiment_ids")
+                validate_batch_image_masks(image_masks, step)
+                fused_tokens, hidden_states = encode_batch_embeddings(
+                    model,
+                    prompts,
+                    images_batch,
+                    image_masks,
+                    return_hidden_states=bridge_enabled,
+                )
             planner_fused_tokens = None
             planner_states = None
-            plan_token_mask = None
+            memory_context = _optional_batch_tensor(batch, "memory_context", accelerator.device, torch.bfloat16)
+            memory_context_mask = _optional_batch_tensor(batch, "memory_context_mask", accelerator.device, None)
+            short_memory_time_ids = _optional_batch_tensor(batch, "short_memory_time_ids", accelerator.device, None)
+            executed_actions = _optional_batch_tensor(batch, "executed_actions", accelerator.device, torch.bfloat16)
+            executed_action_mask = _optional_batch_tensor(batch, "executed_action_mask", accelerator.device, None)
+            planner_vl_summary = _optional_batch_tensor(batch, "planner_vl_summary", accelerator.device, torch.bfloat16)
+            plan_token_mask = _optional_batch_tensor(batch, "plan_token_mask", accelerator.device, None)
             if "planner_images" in batch:
                 planner_image_masks = batch.get("planner_image_masks")
                 if planner_image_masks is None:
@@ -799,7 +863,7 @@ def train(config):
                     return_hidden_states=False,
                 )
             if "planner_states" in batch:
-                planner_states = batch["planner_states"].to(dtype=torch.bfloat16)
+                planner_states = batch["planner_states"].to(device=accelerator.device, dtype=torch.bfloat16)
 
             with get_autocast_context(accelerator.device):
 
@@ -810,6 +874,12 @@ def train(config):
                     action_mask=action_mask,
                     embodiment_ids=embodiment_ids,
                     hidden_states=hidden_states,
+                    memory_context=memory_context,
+                    memory_context_mask=memory_context_mask,
+                    short_memory_time_ids=short_memory_time_ids,
+                    executed_actions=executed_actions,
+                    executed_action_mask=executed_action_mask,
+                    planner_vl_summary=planner_vl_summary,
                     planner_fused_tokens=planner_fused_tokens,
                     planner_state=planner_states,
                     plan_token_mask=plan_token_mask,
@@ -1003,12 +1073,23 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--finetune_vlm", action=argparse.BooleanOptionalAction, default=argparse.SUPPRESS)
     parser.add_argument("--finetune_action_head", action=argparse.BooleanOptionalAction, default=argparse.SUPPRESS)
     parser.add_argument("--finetune_coarse_planner", action=argparse.BooleanOptionalAction, default=argparse.SUPPRESS)
+    parser.add_argument("--finetune_progress_planner", action=argparse.BooleanOptionalAction, default=argparse.SUPPRESS)
 
     # Misc
+    parser.add_argument("--progress_planner_enabled", action=argparse.BooleanOptionalAction, default=argparse.SUPPRESS)
+    parser.add_argument("--progress_planner_checkpoint", type=str, default=argparse.SUPPRESS)
+    parser.add_argument("--progress_planner_replan_stride", type=int, default=argparse.SUPPRESS)
     parser.add_argument("--per_action_dim", type=int, default=argparse.SUPPRESS)
     parser.add_argument("--state_dim", type=int, default=argparse.SUPPRESS)
     parser.add_argument("--horizon", type=int, default=argparse.SUPPRESS)
     parser.add_argument("--num_layers", type=int, default=argparse.SUPPRESS)
+    parser.add_argument("--action_head_ffn_dim", type=int, default=argparse.SUPPRESS)
+    parser.add_argument("--num_plan_slots", type=int, default=argparse.SUPPRESS)
+    parser.add_argument("--visual_gate_lambda", type=float, default=argparse.SUPPRESS)
+    parser.add_argument("--plan_gate_lambda", type=float, default=argparse.SUPPRESS)
+    parser.add_argument("--short_memory_time_bins", type=int, default=argparse.SUPPRESS)
+    parser.add_argument("--max_vlm_tokens", type=int, default=argparse.SUPPRESS)
+    parser.add_argument("--num_inference_timesteps", type=int, default=argparse.SUPPRESS)
     parser.add_argument("--num_workers", type=int, default=argparse.SUPPRESS)
     parser.add_argument("--dropout", type=float, default=argparse.SUPPRESS)
     return parser

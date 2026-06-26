@@ -28,7 +28,7 @@ P_k: [B, 1, 896]
 intent target z_k: [B, 128]
 ```
 
-The planner-token count is intentionally kept at one for the completed warm-up weights. Changing it should be a separate model revision after discussion.
+The policy action head expands the single base planner token into 8 virtual plan slots inside the action-condition branch.
 
 ## Completed Training Work
 
@@ -38,7 +38,7 @@ LIBERO W=4 progress-state warm-up trained
 RMBench 14-dim H32 intent AE trained
 RMBench W=4 and W=8 progress warm-up caches built
 RMBench W=4 and W=8 progress-state warm-up weights trained
-RMBench W=8 stopped after step_000700.pt
+RMBench W=8 stopped after step 700; per-step checkpoints pruned after recording summaries
 training summaries generated from logs
 ```
 
@@ -46,22 +46,22 @@ training summaries generated from logs
 
 ```text
 RMBench intent AE:
-  /root/autodl-tmp/runs/progress_warmup/rmbench_h32_intent_ae_v1/best.pt
+  $AUTODL_TMP/runs/progress_warmup/rmbench_h32_intent_ae_v1/best.pt
   best step: 950
   val_loss: 0.015030
 
 LIBERO W=4 progress warm-up:
-  /root/autodl-tmp/runs/progress_warmup/libero_progress_state_planner_h32_r16_w4_bs12800_epval_v1/best.pt
+  $AUTODL_TMP/runs/progress_warmup/libero_progress_state_planner_h32_r16_w4_bs12800_epval_v1/best.pt
   best step: 310
   val_loss: 0.017872
 
 RMBench W=4 progress warm-up:
-  /root/autodl-tmp/runs/progress_warmup/rmbench_progress_state_planner_h32_r16_w4_bs12800_epval_v1/best.pt
+  $AUTODL_TMP/runs/progress_warmup/rmbench_progress_state_planner_h32_r16_w4_bs12800_epval_v1/best.pt
   best step: 590
   val_loss: 0.001225
 
 RMBench W=8 progress warm-up:
-  /root/autodl-tmp/runs/progress_warmup/rmbench_progress_state_planner_h32_r16_w8_bs6656_epval_v1/best.pt
+  $AUTODL_TMP/runs/progress_warmup/rmbench_progress_state_planner_h32_r16_w8_bs6656_epval_v1/best.pt
   best step: 660
   val_loss: 0.001016
 ```
@@ -75,15 +75,16 @@ docs/progress_state_planner_design_zh.md      current long-memory and planner de
 docs/current_project_state.md                 detailed state, artifacts, metrics, next work
 docs/engineering_reproducibility.md           reproducibility and warm-up commands
 docs/bridge_himem_design.md                   Progress-state planner surface
+docs/direct_bridge_attention_design_zh.md     Direct bridge-attn action-head design
 docs/project_structure.md                     code/config/docs/output boundaries
 coarse_planner/README.md                      legacy H32 baseline commands
 ```
 
 ## Next Work
 
-1. Decide whether the planner remains one intent token or splits into multiple intent tokens.
-2. Inspect W=4 vs W=8 per-suite behavior before changing the planner structure.
-3. Integrate short visual-token memory on the policy side after the planner-token decision.
+1. Build real InternVL3 visual-token replay caches at training scale.
+2. Train the direct bridge policy with short memory and progress planner checkpoint conditioning.
+3. Run checkpoint-level LIBERO/RMBench inference smoke and then full benchmark eval.
 4. Keep LIBERO and RMBench data code separated unless a shared abstraction becomes clearly useful.
 
 ## Guardrails

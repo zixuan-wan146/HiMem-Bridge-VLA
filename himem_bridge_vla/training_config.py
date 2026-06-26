@@ -39,10 +39,21 @@ TRAINING_DEFAULTS: dict[str, Any] = {
     "finetune_vlm": False,
     "finetune_action_head": False,
     "finetune_coarse_planner": True,
+    "progress_planner_enabled": False,
+    "progress_planner_checkpoint": None,
+    "finetune_progress_planner": False,
+    "progress_planner_replan_stride": 16,
     "per_action_dim": 7,
     "state_dim": 7,
-    "horizon": 16,
+    "horizon": 32,
     "num_layers": 8,
+    "action_head_ffn_dim": 3584,
+    "num_plan_slots": 8,
+    "visual_gate_lambda": 0.5,
+    "plan_gate_lambda": 0.25,
+    "short_memory_time_bins": 2,
+    "max_vlm_tokens": None,
+    "num_inference_timesteps": 15,
     "num_workers": 4,
     "dropout": 0.0,
     "boundary_loss_weight": 1.0,
@@ -119,6 +130,12 @@ POSITIVE_INT_KEYS = (
     "horizon",
     "per_action_dim",
     "state_dim",
+    "progress_planner_replan_stride",
+    "num_inference_timesteps",
+    "num_layers",
+    "action_head_ffn_dim",
+    "num_plan_slots",
+    "short_memory_time_bins",
 )
 
 NON_NEGATIVE_INT_KEYS = (
@@ -136,6 +153,8 @@ NON_NEGATIVE_FLOAT_KEYS = (
     "dropout",
     "boundary_loss_weight",
     "progress_loss_weight",
+    "visual_gate_lambda",
+    "plan_gate_lambda",
 )
 
 
@@ -168,9 +187,14 @@ def validate_training_config(
         raise FileNotFoundError(f"Bridge-HiMem config file not found: {bridge_himem_config}")
 
     for key in POSITIVE_INT_KEYS:
-        value = _as_int(config.get(key, 0), f"--{key}")
+        value = _as_int(config.get(key, TRAINING_DEFAULTS.get(key, 0)), f"--{key}")
         if value <= 0:
             raise ValueError(f"--{key} must be positive, got {value}")
+
+    if config.get("max_vlm_tokens") is not None:
+        value = _as_int(config["max_vlm_tokens"], "--max_vlm_tokens")
+        if value <= 0:
+            raise ValueError(f"--max_vlm_tokens must be positive, got {value}")
 
     for key in NON_NEGATIVE_INT_KEYS:
         if key in config:

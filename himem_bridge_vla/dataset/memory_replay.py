@@ -8,8 +8,9 @@ from typing import Any
 
 
 DEFAULT_MEMORY_SHORT_OFFSETS = (32, 16)
-DEFAULT_MEMORY_LONG_CAPACITY = 4
+DEFAULT_MEMORY_LONG_CAPACITY = 0
 DEFAULT_MEMORY_ACTION_HORIZON = 32
+DEFAULT_EXECUTED_ACTION_STRIDE = 16
 
 
 @dataclass(frozen=True)
@@ -19,6 +20,9 @@ class MemoryReplaySample:
     episode_length: int
     action_horizon: int
     action_valid_count: int
+    executed_action_stride: int
+    executed_action_start: int
+    executed_action_valid_count: int
     short_steps: tuple[int | None, ...]
     short_mask: tuple[bool, ...]
     long_steps: tuple[int, ...]
@@ -37,6 +41,10 @@ class MemoryReplaySample:
             "action_start": self.current_step,
             "action_end": self.current_step + self.action_valid_count,
             "action_valid_count": self.action_valid_count,
+            "executed_action_stride": self.executed_action_stride,
+            "executed_action_start": self.executed_action_start,
+            "executed_action_end": self.current_step,
+            "executed_action_valid_count": self.executed_action_valid_count,
             "short_steps": list(self.short_steps),
             "short_mask": list(self.short_mask),
             "long_steps": list(self.long_steps),
@@ -55,6 +63,7 @@ def build_memory_replay_samples(
     action_horizon: int = DEFAULT_MEMORY_ACTION_HORIZON,
     stride: int = 1,
     short_offsets: Sequence[int] = DEFAULT_MEMORY_SHORT_OFFSETS,
+    executed_action_stride: int = DEFAULT_EXECUTED_ACTION_STRIDE,
     long_candidate_steps: Iterable[int] | None = None,
     long_capacity: int = DEFAULT_MEMORY_LONG_CAPACITY,
     include_tail: bool = False,
@@ -73,10 +82,14 @@ def build_memory_replay_samples(
         raise ValueError(f"action_horizon must be positive, got {action_horizon}")
     if stride <= 0:
         raise ValueError(f"stride must be positive, got {stride}")
+    executed_action_stride = int(executed_action_stride)
+    if executed_action_stride <= 0:
+        raise ValueError(f"executed_action_stride must be positive, got {executed_action_stride}")
     offsets = _normalize_short_offsets(short_offsets)
-    if int(long_capacity) < 0:
-        raise ValueError(f"long_capacity must be non-negative, got {long_capacity}")
-    candidate_steps = tuple(sorted({int(step) for step in long_candidate_steps or () if int(step) >= 0}))
+    if int(long_capacity) != 0:
+        raise ValueError("long_capacity must be 0; long memory is produced by the progress-state planner")
+    if long_candidate_steps:
+        raise ValueError("long_candidate_steps is deprecated; replay indexes only carry fixed short visual memory")
 
     samples: list[MemoryReplaySample] = []
     for current_step in range(0, episode_length, stride):
@@ -85,11 +98,8 @@ def build_memory_replay_samples(
             continue
         short_steps = tuple((current_step - offset) if current_step - offset >= 0 else None for offset in offsets)
         short_mask = tuple(step is not None for step in short_steps)
-        long_steps = _select_long_steps(
-            candidate_steps,
-            current_step=current_step,
-            long_capacity=int(long_capacity),
-        )
+        executed_start = max(0, current_step - executed_action_stride)
+        executed_valid_count = current_step - executed_start
         samples.append(
             MemoryReplaySample(
                 episode_id=str(episode_id),
@@ -97,9 +107,12 @@ def build_memory_replay_samples(
                 episode_length=episode_length,
                 action_horizon=action_horizon,
                 action_valid_count=action_valid_count,
+                executed_action_stride=executed_action_stride,
+                executed_action_start=executed_start,
+                executed_action_valid_count=executed_valid_count,
                 short_steps=short_steps,
                 short_mask=short_mask,
-                long_steps=long_steps,
+                long_steps=(),
                 benchmark=benchmark,
                 task_name=task_name,
                 source_path=source_path,
@@ -116,12 +129,15 @@ def build_memory_replay_manifest(
     action_horizon: int,
     stride: int,
     short_offsets: Sequence[int],
-    long_capacity: int,
-    include_tail: bool,
-    sample_count: int,
-    episode_count: int,
+    executed_action_stride: int = DEFAULT_EXECUTED_ACTION_STRIDE,
+    long_capacity: int = DEFAULT_MEMORY_LONG_CAPACITY,
+    include_tail: bool = False,
+    sample_count: int = 0,
+    episode_count: int = 0,
     task_counts: Mapping[str, int] | None = None,
 ) -> dict[str, Any]:
+    if int(long_capacity) != 0:
+        raise ValueError("long_capacity must be 0; long memory is produced by the progress-state planner")
     return {
         "format": "memory_replay_index",
         "version": 1,
@@ -129,6 +145,7 @@ def build_memory_replay_manifest(
         "action_horizon": int(action_horizon),
         "stride": int(stride),
         "short_offsets": list(_normalize_short_offsets(short_offsets)),
+        "executed_action_stride": int(executed_action_stride),
         "long_capacity": int(long_capacity),
         "include_tail": bool(include_tail),
         "sample_count": int(sample_count),
@@ -166,10 +183,3 @@ def _normalize_short_offsets(short_offsets: Sequence[int]) -> tuple[int, ...]:
     if any(offset <= 0 for offset in offsets):
         raise ValueError(f"short_offsets must be positive, got {short_offsets}")
     return offsets
-
-
-def _select_long_steps(candidate_steps: Sequence[int], *, current_step: int, long_capacity: int) -> tuple[int, ...]:
-    if long_capacity == 0:
-        return ()
-    eligible = [step for step in candidate_steps if step < current_step]
-    return tuple(eligible[-long_capacity:])

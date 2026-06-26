@@ -1,7 +1,11 @@
 Dockerfile
 swanlog/
 __pycache__/
+**/__pycache__/
+*.py[cod]
 .pytest_cache/
+.ruff_cache/
+.mypy_cache/
 .DS_Store
 wandb/
 **/.ipynb_checkpoints/
@@ -22,6 +26,20 @@ exports/
 run_outputs/
 runs/
 outputs/
+
+# Vendored reference repositories should stay source-only.
+reference-repo/**/*.pdf
+reference-repo/**/*.mp4
+reference-repo/**/*.avi
+reference-repo/**/*.mov
+reference-repo/**/*.jpg
+reference-repo/**/*.jpeg
+reference-repo/**/*.png
+reference-repo/**/*.pkl
+reference-repo/**/eval_logs/
+reference-repo/**/pretrained_models/
+reference-repo/**/*.egg-info/
+
 !transition_trigger/outputs/
 transition_trigger/outputs/*
 !transition_trigger/outputs/README.md

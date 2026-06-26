@@ -168,7 +168,6 @@ async def run(SERVER_URL: str, max_steps: int = None, num_episodes: int = None, 
                     decision_steps = 0
                     control_steps = 0
                     frames = []
-                    episode_key = f"{task_suite_name}:task{task_id}:episode{ep}"
 
                     for step in range(max_steps):
                         decision_steps += 1

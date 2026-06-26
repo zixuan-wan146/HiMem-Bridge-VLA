@@ -10,7 +10,7 @@ ckpt_dir="${HIMEM_CKPT_DIR:-${1:-}}"
 host="${HIMEM_HOST:-127.0.0.1}"
 port="${HIMEM_PORT:-9000}"
 device="${HIMEM_DEVICE:-cuda:0}"
-inference_steps="${HIMEM_INFERENCE_STEPS:-1}"
+inference_steps="${HIMEM_INFERENCE_STEPS:-15}"
 skip_preflight="${HIMEM_SKIP_PREFLIGHT:-0}"
 allow_unsafe_checkpoint_load="${HIMEM_ALLOW_UNSAFE_CHECKPOINT_LOAD:-0}"
 

@@ -134,6 +134,33 @@ def test_custom_collate_includes_action_segment_targets():
     assert "plan_active_mask" not in batch
 
 
+def test_custom_collate_includes_direct_bridge_optional_tensors():
+    torch = pytest.importorskip("torch")
+    train_script = _load_train_script()
+    train_script.torch = torch
+
+    item = {
+        "prompt": "pick",
+        "images": torch.zeros(1, 3, 4, 4),
+        "state": torch.zeros(2),
+        "action": torch.zeros(2, 2),
+        "action_mask": torch.ones(2, 2, dtype=torch.bool),
+        "image_mask": torch.ones(1, dtype=torch.bool),
+        "embodiment_id": torch.tensor(0),
+        "memory_context": torch.zeros(4, 8),
+        "memory_context_mask": torch.ones(4, dtype=torch.bool),
+        "short_memory_time_ids": torch.tensor([0, 0, 1, 1]),
+        "plan_token_mask": torch.ones(1, dtype=torch.bool),
+    }
+
+    batch = train_script.custom_collate_fn([item, item])
+
+    assert tuple(batch["memory_context"].shape) == (2, 4, 8)
+    assert tuple(batch["memory_context_mask"].shape) == (2, 4)
+    assert batch["short_memory_time_ids"].tolist() == [[0, 0, 1, 1], [0, 0, 1, 1]]
+    assert tuple(batch["plan_token_mask"].shape) == (2, 1)
+
+
 def test_compute_coarse_planner_loss_uses_cached_model_output():
     torch = pytest.importorskip("torch")
     train_script = _load_train_script()

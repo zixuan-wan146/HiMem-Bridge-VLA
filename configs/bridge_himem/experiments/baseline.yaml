@@ -2,3 +2,11 @@ extends: ../base.yaml
 
 experiment_name: baseline_fused_only
 
+bridge:
+  enabled: false
+
+context:
+  mode: fused_only
+
+memory:
+  enabled: false

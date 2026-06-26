@@ -5,6 +5,11 @@ addopts = "-q"
 [tool.ruff]
 line-length = 120
 target-version = "py310"
+exclude = [
+  "reference-paper",
+  "referen-repo",
+  "reference-repo",
+]
 
 [tool.ruff.lint]
 select = ["E", "F"]
@@ -15,3 +20,4 @@ ignore = [
 [tool.ruff.lint.per-file-ignores]
 "evaluations/libero/*.py" = ["E402"]
 "scripts/*.py" = ["E402"]
+"tests/*.py" = ["E402"]

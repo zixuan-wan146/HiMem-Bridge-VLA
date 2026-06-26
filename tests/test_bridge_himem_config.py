@@ -21,10 +21,10 @@ class BridgeHiMemConfigTests(unittest.TestCase):
         self.assertTrue(legacy["use_bridge"])
         self.assertTrue(legacy["use_memory"])
         self.assertEqual(legacy["bridge_variant"], "crosskv")
-        self.assertEqual(legacy["memory_kind"], "dual_fifo_visual")
-        self.assertEqual(legacy["memory_short_offsets"], [8, 16])
-        self.assertEqual(legacy["memory_entry_tokens"], 1)
-        self.assertEqual(legacy["bridge_raw_layers"], [3, 7, 11, 14])
+        self.assertEqual(legacy["memory_kind"], "fixed_recent_visual")
+        self.assertEqual(legacy["memory_short_offsets"], [16, 8])
+        self.assertEqual(legacy["memory_entry_tokens"], 16)
+        self.assertEqual(legacy["bridge_raw_layers"], [3, 6, 9, 12])
         self.assertFalse(legacy["allow_image_token_truncation"])
         self.assertEqual(legacy["bridge_context_mode"], "bridge_clean")
 
@@ -61,7 +61,7 @@ class BridgeHiMemConfigTests(unittest.TestCase):
         self.assertEqual(config.bridge.variant, "mixed_latent")
         self.assertTrue(config.memory.enabled)
         self.assertTrue(config.skill.enabled)
-        self.assertEqual(config.memory.compression.entry_tokens, 1)
+        self.assertEqual(config.memory.compression.entry_tokens, 16)
 
     def test_nested_mapping_is_supported(self):
         config_module = self._import_or_skip("himem_bridge_vla.bridge_himem_config")
@@ -70,13 +70,13 @@ class BridgeHiMemConfigTests(unittest.TestCase):
             {
                 "bridge_himem": {
                     "vlm": {"hidden_dim": 8, "raw_layers": ["shallow", "deep"]},
-                    "action_query": {"num_tokens": 3},
                     "bridge": {
                         "enabled": True,
                         "variant": "mixed_latent",
                         "num_layers": 1,
                         "num_heads": 2,
-                        "num_action_tokens": 2,
+                        "num_bridge_tokens": 2,
+                        "num_action_queries": 3,
                     },
                     "context": {"mode": "bridge_clean"},
                     "memory": {
@@ -84,7 +84,7 @@ class BridgeHiMemConfigTests(unittest.TestCase):
                         "hidden_dim": 8,
                         "views": ["base", "wrist"],
                         "short": {"capacity": 2, "offsets": [32, 16]},
-                        "long": {"capacity": 4},
+                        "long": {"capacity": 0},
                         "compression": {"entry_tokens": 2, "num_heads": 2},
                     },
                 }
@@ -142,6 +142,55 @@ class BridgeHiMemConfigTests(unittest.TestCase):
                 }
             )
 
+    def test_progress_planner_maps_to_legacy_model_config(self):
+        config_module = self._import_or_skip("himem_bridge_vla.bridge_himem_config")
+
+        config = config_module.BridgeHiMemConfig.from_mapping(
+            {
+                "vlm": {"hidden_dim": 8},
+                "bridge": {"enabled": True, "variant": "direct", "num_heads": 2},
+                "progress_planner": {
+                    "enabled": True,
+                    "hidden_dim": 8,
+                    "state_dim": 5,
+                    "action_dim": 3,
+                    "replan_stride": 4,
+                    "planner_layers": 1,
+                    "num_heads": 2,
+                },
+            }
+        )
+        legacy = config.to_legacy_model_config()
+
+        self.assertTrue(config.progress_planner.enabled)
+        self.assertTrue(legacy["progress_planner_enabled"])
+        self.assertEqual(legacy["progress_planner_hidden_dim"], 8)
+        self.assertEqual(legacy["progress_planner_state_dim"], 5)
+        self.assertEqual(legacy["progress_planner_action_dim"], 3)
+        self.assertEqual(legacy["progress_planner_replan_stride"], 4)
+
+    def test_progress_planner_rejects_legacy_coarse_planner_together(self):
+        config_module = self._import_or_skip("himem_bridge_vla.bridge_himem_config")
+
+        with self.assertRaisesRegex(ValueError, "mutually exclusive"):
+            config_module.BridgeHiMemConfig.from_mapping(
+                {
+                    "vlm": {"hidden_dim": 8},
+                    "bridge": {"enabled": True, "variant": "direct", "num_heads": 2},
+                    "coarse_planner": {
+                        "enabled": True,
+                        "hidden_dim": 8,
+                        "num_heads": 2,
+                        "num_layers": 3,
+                    },
+                    "progress_planner": {
+                        "enabled": True,
+                        "hidden_dim": 8,
+                        "num_heads": 2,
+                    },
+                }
+            )
+
     def test_coarse_planner_rejects_out_of_range_action_indices(self):
         config_module = self._import_or_skip("himem_bridge_vla.bridge_himem_config")
 
@@ -174,6 +223,17 @@ class BridgeHiMemConfigTests(unittest.TestCase):
                 {
                     "vlm": {"hidden_dim": 8},
                     "memory": {"enabled": True, "hidden_dim": 8, "short": {"capacity": 2, "offsets": [16]}},
+                }
+            )
+
+    def test_memory_long_capacity_must_remain_zero(self):
+        config_module = self._import_or_skip("himem_bridge_vla.bridge_himem_config")
+
+        with self.assertRaisesRegex(ValueError, "memory.long.capacity"):
+            config_module.BridgeHiMemConfig.from_mapping(
+                {
+                    "vlm": {"hidden_dim": 8},
+                    "memory": {"enabled": True, "hidden_dim": 8, "long": {"capacity": 1}},
                 }
             )
 

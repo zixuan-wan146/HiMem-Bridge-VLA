@@ -60,7 +60,7 @@ class FlowMatchingConfigTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "action_mask shape"):
             head(fused_tokens, actions_gt=actions_gt, action_mask=action_mask)
 
-    def test_single_step_action_head_registers_projection_before_forward(self):
+    def test_single_step_action_head_registers_all_parameters_before_forward(self):
         torch = self._import_or_skip("torch")
         flow_matching = self._import_or_skip("himem_bridge_vla.model.action_head.flow_matching")
 
@@ -76,7 +76,8 @@ class FlowMatchingConfigTests(unittest.TestCase):
         )
 
         param_names_before = set(dict(head.named_parameters()))
-        self.assertIn("single_action_proj.weight", param_names_before)
+        self.assertIn("action_encoder.W1.linear.weight", param_names_before)
+        self.assertIn("action_decoder.W3.linear.weight", param_names_before)
 
         fused_tokens = torch.zeros(2, 1, 8)
         actions_gt = torch.zeros(2, 1, 3)
@@ -164,6 +165,85 @@ class FlowMatchingConfigTests(unittest.TestCase):
 
         self.assertEqual(tuple(pred_velocity.shape), (2, 6))
         self.assertEqual(tuple(noise.shape), (2, 2, 3))
+
+    def test_direct_bridge_action_head_accepts_all_context_sources(self):
+        torch = self._import_or_skip("torch")
+        flow_matching = self._import_or_skip("himem_bridge_vla.model.action_head.flow_matching")
+
+        torch.manual_seed(0)
+        head = flow_matching.FlowmatchingActionHead(
+            embed_dim=8,
+            hidden_dim=16,
+            action_dim=6,
+            horizon=2,
+            per_action_dim=3,
+            num_heads=2,
+            num_layers=2,
+            num_inference_timesteps=1,
+        )
+        fused_tokens = torch.zeros(2, 5, 8)
+        hidden_states = [torch.randn(2, 5, 8) for _ in range(4)]
+        short_memory = torch.randn(2, 6, 8)
+        short_time_ids = torch.tensor([[0, 0, 0, 1, 1, 1], [0, 0, 0, 1, 1, 1]])
+        short_mask = torch.tensor([[True, True, True, True, False, False], [True, True, True, True, True, True]])
+        plan_tokens = torch.randn(2, 1, 8)
+        state = torch.randn(2, 7)
+        actions_gt = torch.zeros(2, 2, 3)
+        action_mask = torch.ones(2, 2, 3)
+
+        pred_velocity, noise = head(
+            fused_tokens,
+            state=state,
+            actions_gt=actions_gt,
+            action_mask=action_mask,
+            vlm_hidden_states=hidden_states,
+            short_memory_tokens=short_memory,
+            short_memory_time_ids=short_time_ids,
+            short_memory_mask=short_mask,
+            plan_tokens=plan_tokens,
+        )
+
+        self.assertEqual(tuple(pred_velocity.shape), (2, 6))
+        self.assertEqual(tuple(noise.shape), (2, 2, 3))
+        self.assertEqual(tuple(head.plan_slot_embeddings.shape), (8, 8))
+
+    def test_direct_bridge_action_head_inference_smoke_with_all_context_sources(self):
+        torch = self._import_or_skip("torch")
+        flow_matching = self._import_or_skip("himem_bridge_vla.model.action_head.flow_matching")
+
+        torch.manual_seed(0)
+        head = flow_matching.FlowmatchingActionHead(
+            embed_dim=16,
+            hidden_dim=32,
+            action_dim=8,
+            horizon=4,
+            per_action_dim=2,
+            num_heads=4,
+            num_layers=2,
+            num_inference_timesteps=2,
+        )
+        fused_tokens = torch.randn(1, 7, 16)
+        hidden_states = [torch.randn(1, 7, 16) for _ in range(4)]
+        short_memory = torch.randn(1, 8, 16)
+        short_time_ids = torch.tensor([[0, 0, 0, 0, 1, 1, 1, 1]])
+        short_mask = torch.tensor([[True, True, True, True, True, True, False, False]])
+        plan_tokens = torch.randn(1, 1, 16)
+        state = torch.randn(1, 7)
+        action_mask = torch.tensor([[1.0, 0.0]])
+
+        action = head.get_action(
+            fused_tokens,
+            state=state,
+            action_mask=action_mask,
+            vlm_hidden_states=hidden_states,
+            short_memory_tokens=short_memory,
+            short_memory_time_ids=short_time_ids,
+            short_memory_mask=short_mask,
+            plan_tokens=plan_tokens,
+        ).view(1, 4, 2)
+
+        self.assertEqual(tuple(action.shape), (1, 4, 2))
+        self.assertTrue(torch.equal(action[:, :, 1], torch.zeros_like(action[:, :, 1])))
 
     def _import_or_skip(self, module_name):
         try:

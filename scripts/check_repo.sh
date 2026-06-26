@@ -82,12 +82,7 @@ run_ruff() {
 }
 
 run_pytest() {
-  local pytest_args=(-m pytest)
-  if [ "${HIMEM_CHECK_INCLUDE_TRAINING:-0}" != "1" ]; then
-    log "Skipping training smoke tests; set HIMEM_CHECK_INCLUDE_TRAINING=1 to include them"
-    pytest_args+=(--ignore=tests/test_memory_token_cache_adapter.py)
-  fi
-  run_step "Unit tests" "$python_bin" "${pytest_args[@]}"
+  run_step "Unit tests" "$python_bin" -m pytest
 }
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -110,6 +105,12 @@ check_shell_syntax
 run_step "Repository preflight" "$python_bin" scripts/preflight.py
 run_step "Bridge-HiMem config validation" "$python_bin" scripts/validate_bridge_himem_configs.py
 run_step "Training config validation" "$python_bin" scripts/validate_training_configs.py
+run_step \
+  "Direct bridge inference smoke" \
+  "$python_bin" scripts/smoke_direct_bridge_inference.py --preset tiny --device cpu
+run_step \
+  "Direct bridge token-cache training smoke" \
+  "$python_bin" scripts/smoke_direct_bridge_token_cache_training.py --preset tiny --device cpu --steps 1 --batch-size 2
 run_step "Benchmark inventory" "$python_bin" scripts/inspect_benchmarks.py --allow-missing
 run_step "LIBERO setup dry-run" env HIMEM_SETUP_LIBERO_DRY_RUN=1 scripts/setup_libero_env.sh
 run_step \

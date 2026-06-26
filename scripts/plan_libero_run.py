@@ -54,7 +54,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--host", default="127.0.0.1", help="HiMem-Bridge-VLA server host.")
     parser.add_argument("--port", type=_port, default=9000, help="HiMem-Bridge-VLA server port.")
     parser.add_argument("--device", default="cuda:0", help="HiMem-Bridge-VLA server device.")
-    parser.add_argument("--inference-steps", type=_positive_int, default=1, help="HiMem-Bridge-VLA inference steps.")
+    parser.add_argument("--inference-steps", type=_positive_int, default=15, help="HiMem-Bridge-VLA inference steps.")
     parser.add_argument("--min-success-rate", type=_rate, help="Optional report metric gate.")
     parser.add_argument("--min-total-episodes", type=_non_negative_int, help="Optional report metric gate.")
     parser.add_argument("--baseline", action="append", default=[], help="Optional baseline input for reports.")
@@ -105,7 +105,7 @@ def build_plan_from_values(
     host: str = "127.0.0.1",
     port: int = 9000,
     device: str = "cuda:0",
-    inference_steps: int = 1,
+    inference_steps: int = 15,
     min_success_rate: float | None = None,
     min_total_episodes: int | None = None,
     baseline: Sequence[str] = (),

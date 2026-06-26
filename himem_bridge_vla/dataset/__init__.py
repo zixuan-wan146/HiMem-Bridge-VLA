@@ -19,6 +19,7 @@ from himem_bridge_vla.dataset.libero_progress_warmup import load_action_segment_
 from himem_bridge_vla.dataset.libero_progress_warmup import read_libero_progress_warmup_manifest
 from himem_bridge_vla.dataset.libero_progress_warmup import resolve_storage_dtype
 from himem_bridge_vla.dataset.memory_replay import DEFAULT_MEMORY_ACTION_HORIZON
+from himem_bridge_vla.dataset.memory_replay import DEFAULT_EXECUTED_ACTION_STRIDE
 from himem_bridge_vla.dataset.memory_replay import DEFAULT_MEMORY_LONG_CAPACITY
 from himem_bridge_vla.dataset.memory_replay import DEFAULT_MEMORY_SHORT_OFFSETS
 from himem_bridge_vla.dataset.memory_replay import MemoryReplaySample
@@ -37,16 +38,20 @@ from himem_bridge_vla.dataset.memory_token_cache import DEFAULT_TOKEN_CACHE_SHAR
 from himem_bridge_vla.dataset.memory_token_cache import MEMORY_TOKEN_CACHE_FORMAT
 from himem_bridge_vla.dataset.memory_token_cache import MEMORY_TOKEN_CACHE_VERSION
 from himem_bridge_vla.dataset.memory_token_cache import ImageStatsVisualTokenEncoder
+from himem_bridge_vla.dataset.memory_token_cache import ImageStatsVLMHiddenStateEncoder
 from himem_bridge_vla.dataset.memory_token_cache import InternVL3VisualTokenEncoder
+from himem_bridge_vla.dataset.memory_token_cache import InternVL3VLMHiddenStateEncoder
 from himem_bridge_vla.dataset.memory_token_cache import MemoryTokenCacheDataset
 from himem_bridge_vla.dataset.memory_token_cache import TokenCacheBuildResult
 from himem_bridge_vla.dataset.memory_token_cache import TokenCacheDatasetConfig
 from himem_bridge_vla.dataset.memory_token_cache import TokenCacheShard
 from himem_bridge_vla.dataset.memory_token_cache import build_memory_replay_token_cache
+from himem_bridge_vla.dataset.memory_token_cache import collate_direct_bridge_token_cache_samples
 from himem_bridge_vla.dataset.memory_token_cache import collate_memory_token_cache_samples
+from himem_bridge_vla.dataset.memory_token_cache import concat_tokens_by_view
 from himem_bridge_vla.dataset.memory_token_cache import encode_images_by_view
 from himem_bridge_vla.dataset.memory_token_cache import encode_memory_replay_item
-from himem_bridge_vla.dataset.memory_token_cache import memory_read_result_from_token_cache_sample
+from himem_bridge_vla.dataset.memory_token_cache import pack_visual_tokens
 from himem_bridge_vla.dataset.memory_token_cache import read_token_cache_manifest
 from himem_bridge_vla.dataset.rmbench import DEFAULT_RMBENCH_ACTION_KEY
 from himem_bridge_vla.dataset.rmbench import DEFAULT_RMBENCH_CAMERA_NAMES
@@ -69,6 +74,7 @@ from himem_bridge_vla.dataset.rmbench import read_rmbench_state_action_arrays
 
 __all__ = [
     "DEFAULT_LIBERO_VIEW_NAMES",
+    "DEFAULT_EXECUTED_ACTION_STRIDE",
     "DEFAULT_MEMORY_ACTION_HORIZON",
     "DEFAULT_MEMORY_LONG_CAPACITY",
     "DEFAULT_MEMORY_SHORT_OFFSETS",
@@ -82,8 +88,10 @@ __all__ = [
     "MEMORY_TOKEN_CACHE_FORMAT",
     "MEMORY_TOKEN_CACHE_VERSION",
     "ImageStatsVisualTokenEncoder",
+    "ImageStatsVLMHiddenStateEncoder",
     "ImageStatsVLSummaryEncoder",
     "InternVL3VisualTokenEncoder",
+    "InternVL3VLMHiddenStateEncoder",
     "InternVL3VLSummaryEncoder",
     "LiberoEpisodeReader",
     "LiberoFrame",
@@ -115,17 +123,19 @@ __all__ = [
     "build_memory_replay_token_cache",
     "build_rmbench_state_matrix",
     "build_rmbench_state_vector",
+    "collate_direct_bridge_token_cache_samples",
     "collate_libero_progress_warmup_windows",
     "collate_memory_token_cache_samples",
     "collate_memory_replay_frames",
     "compute_rmbench_normalization_result",
     "compute_rmbench_normalization_stats",
+    "concat_tokens_by_view",
     "decode_rmbench_rgb",
     "encode_images_by_view",
     "encode_memory_replay_item",
     "iter_rmbench_episode_files",
-    "memory_read_result_from_token_cache_sample",
     "load_action_segment_autoencoder",
+    "pack_visual_tokens",
     "read_libero_progress_warmup_manifest",
     "read_libero_state_vector",
     "read_memory_replay_jsonl",

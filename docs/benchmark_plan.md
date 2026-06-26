@@ -49,9 +49,8 @@ scripts/report_libero_runs.py
 - memory replay：可以用 `scripts/build_libero_memory_replay_index.py` 生成轻量 JSONL index，固定当前帧、短期历史帧、action chunk 范围和 mask。
 - frame replay：`himem_bridge_vla/dataset/memory_replay_frames.py` 可以根据 index row 回读当前图像、短期历史图像、state 和 future action chunk。
 - replay dataset：`himem_bridge_vla/dataset/memory_replay_dataset.py` 提供 PyTorch-compatible dataset 和 collate，输出当前图像、短期历史图像、state、future actions 和 mask。
-- visual token cache：`scripts/build_memory_replay_token_cache.py` 可以把 replay dataset 中的图像预先编码成按 view 分组的 visual tokens，写成 shard + manifest。真实训练默认使用 InternVL3 visual tower；测试和 smoke 可使用 `image_stats` encoder。
-- token cache dataset：`himem_bridge_vla/dataset/memory_token_cache.py` 提供 `MemoryTokenCacheDataset` 和 `collate_memory_token_cache_samples`，可以从 shard 回读 visual tokens、state、future actions、`short_steps`、`short_mask`，并为每个样本构造 short `MemoryReadResult`。
-- memory context：`himem_bridge_vla/training/memory_context.py` 可以把 token-cache batch 中的 `short_memory` 压缩成 batched `memory_context` 和 `memory_context_mask`，作为历史 smoke 数据接口。
+- replay token cache：`scripts/build_memory_replay_token_cache.py` 可以把 replay dataset 中的图像预先编码成按 view 分组的 visual tower tokens，并可选保存 current VLM hidden-state layers，写成 shard + manifest。最终 direct bridge 训练使用 InternVL3 + `--include-vlm-hidden-states --hidden-state-layers 3 6 9 12`；测试和 smoke 可使用 `image_stats` encoder。
+- token cache dataset：`himem_bridge_vla/dataset/memory_token_cache.py` 提供 `MemoryTokenCacheDataset` 和 `collate_memory_token_cache_samples`，可以从 shard 回读 current visual tokens、可选 current hidden states、short visual tokens、state、future actions、`short_steps`、`short_mask` 和 `action_mask`。
 
 缺口：
 
@@ -170,7 +169,7 @@ endpose/right_endpose      [T, 7]
 - 已实现 RMBench memory replay index builder：`scripts/build_rmbench_memory_replay_index.py`。它按 low-level step 写出当前帧、短期 memory offset、action chunk 范围和 mask；当前只生成轻量 JSONL index，不缓存图像或 visual tokens。
 - frame replay：`himem_bridge_vla/dataset/memory_replay_frames.py` 可以根据 index row 回读三相机图像、state 和 14 维 future action chunk。
 - replay dataset：`himem_bridge_vla/dataset/memory_replay_dataset.py` 可复用同一套 index/frame reader，为后续 visual token cache 和数据检查提供稳定 batch 协议。
-- visual token cache：`scripts/build_memory_replay_token_cache.py` 可复用同一套 replay dataset 生成三相机 visual token shard。RMBench / 双臂默认后续 memory compression 使用 `n_m=2`，但 cache 本身保存的是视觉塔输出 tokens，不在 cache 阶段做 learned-query 压缩。
+- replay token cache：`scripts/build_memory_replay_token_cache.py` 可复用同一套 replay dataset 生成三相机 visual token shard，并可选保存 current VLM hidden-state layers。RMBench / 双臂默认后续 memory compression 使用 `n_m=2`，但 short memory token packing 不在 cache 阶段做 learned-query 压缩。
 - token cache dataset：`MemoryTokenCacheDataset` 可以读取 RMBench 三相机 token shard，并输出 `future_actions` 的 padded batch 和 `action_mask`。这一步只解决离线数据读取，不等价于训练脚本。
 - 需要定义我们模型的 action/state protocol：是否直接使用 14 维 joint action，还是映射到 per-arm 7 维动作。当前只记录该缺口，不实现训练或真实 eval。
 - 已实现 RMBench eval plan builder：`scripts/plan_rmbench_eval.py`。它读取本地 RMBench root，检查官方 `script/eval_policy.py` / `script/eval_policy_client.py` / `script/policy_model_server.py` / policy config / task env / data 目录，并生成 direct 或 socket 模式的评估命令。
@@ -180,7 +179,6 @@ endpose/right_endpose      [T, 7]
 - 已实现安装脚本：`scripts/install_rmbench_policy_adapter.py`。它会把 adapter 复制到官方 RMBench 仓库的 `policy/HiMemBridgeVLA/` 下，供 `script/eval_policy.py` import。
 - 已实现 RMBench eval run wrapper：`scripts/run_rmbench_eval.sh`。它会安装 adapter、写 run manifest、写 eval plan，然后逐任务调用官方 `script/eval_policy.py`。
 - 已实现 RMBench run manifest：`scripts/write_rmbench_run_manifest.py`，记录任务列表、server URI、action/state protocol、policy 名称和 git/environment metadata。
-- 已有 token cache batch 到 `memory_context` / `memory_context_mask` 的共享构造入口；该入口只作为历史 smoke 数据接口保留。
 
 ## 4. 统一推进任务
 

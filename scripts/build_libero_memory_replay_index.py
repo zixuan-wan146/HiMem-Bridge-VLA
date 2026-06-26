@@ -13,6 +13,7 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from himem_bridge_vla.dataset.memory_replay import DEFAULT_MEMORY_ACTION_HORIZON  # noqa: E402
+from himem_bridge_vla.dataset.memory_replay import DEFAULT_EXECUTED_ACTION_STRIDE  # noqa: E402
 from himem_bridge_vla.dataset.memory_replay import DEFAULT_MEMORY_LONG_CAPACITY  # noqa: E402
 from himem_bridge_vla.dataset.memory_replay import DEFAULT_MEMORY_SHORT_OFFSETS  # noqa: E402
 from himem_bridge_vla.dataset.memory_replay import build_memory_replay_manifest  # noqa: E402
@@ -33,7 +34,13 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--action-horizon", type=int, default=DEFAULT_MEMORY_ACTION_HORIZON)
     parser.add_argument("--stride", type=int, default=1)
     parser.add_argument("--short-offsets", nargs="+", type=int, default=list(DEFAULT_MEMORY_SHORT_OFFSETS))
-    parser.add_argument("--long-capacity", type=int, default=DEFAULT_MEMORY_LONG_CAPACITY)
+    parser.add_argument("--executed-action-stride", type=int, default=DEFAULT_EXECUTED_ACTION_STRIDE)
+    parser.add_argument(
+        "--long-capacity",
+        type=int,
+        default=DEFAULT_MEMORY_LONG_CAPACITY,
+        help="Deprecated compatibility flag. Must remain 0; long memory is trained by the progress-state planner.",
+    )
     parser.add_argument("--include-tail", action="store_true")
     parser.add_argument("--max-episodes-per-suite", type=int, default=None)
     parser.add_argument("--max-episodes-per-task", type=int, default=None)
@@ -46,6 +53,8 @@ def main(argv: list[str] | None = None) -> int:
         raise ValueError("--max-episodes-per-suite must be positive when provided")
     if args.max_episodes_per_task is not None and args.max_episodes_per_task <= 0:
         raise ValueError("--max-episodes-per-task must be positive when provided")
+    if args.executed_action_stride <= 0:
+        raise ValueError("--executed-action-stride must be positive")
 
     libero_root = resolve_libero_root(args.libero_root)
     rows = []
@@ -70,6 +79,7 @@ def main(argv: list[str] | None = None) -> int:
             action_horizon=args.action_horizon,
             stride=args.stride,
             short_offsets=args.short_offsets,
+            executed_action_stride=args.executed_action_stride,
             long_capacity=args.long_capacity,
             include_tail=args.include_tail,
             benchmark="LIBERO",
@@ -90,6 +100,7 @@ def main(argv: list[str] | None = None) -> int:
         action_horizon=args.action_horizon,
         stride=args.stride,
         short_offsets=args.short_offsets,
+        executed_action_stride=args.executed_action_stride,
         long_capacity=args.long_capacity,
         include_tail=args.include_tail,
         sample_count=len(rows),

@@ -90,3 +90,20 @@ def test_audit_rejects_requirements_files_missing_from_policy(tmp_path: Path):
 
     assert report.has_failures
     assert any("not covered" in message.message for message in report.messages)
+
+
+def test_audit_ignores_reference_repository_requirements(tmp_path: Path):
+    module = load_module()
+    (tmp_path / "requirements-dev.txt").write_text("pytest==6.2.5\n")
+    for reference_dir in ("referen-repo", "reference-repo"):
+        reference_requirements = tmp_path / reference_dir / "third_party" / "requirements.txt"
+        reference_requirements.parent.mkdir(parents=True)
+        reference_requirements.write_text("some-unpinned-reference-dependency\n")
+    policy_path = write_policy(
+        tmp_path / "requirements-policy.json",
+        {"files": {"requirements-dev.txt": {"allow_unpinned": {}}}},
+    )
+
+    report = module.audit_requirements(tmp_path, policy_path)
+
+    assert not report.has_failures

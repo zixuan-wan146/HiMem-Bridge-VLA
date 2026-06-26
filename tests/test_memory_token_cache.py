@@ -10,10 +10,11 @@ import pytest
 
 from himem_bridge_vla.dataset.memory_replay import write_memory_replay_jsonl
 from himem_bridge_vla.dataset.memory_token_cache import ImageStatsVisualTokenEncoder
+from himem_bridge_vla.dataset.memory_token_cache import ImageStatsVLMHiddenStateEncoder
 from himem_bridge_vla.dataset.memory_token_cache import MemoryTokenCacheDataset
 from himem_bridge_vla.dataset.memory_token_cache import build_memory_replay_token_cache
+from himem_bridge_vla.dataset.memory_token_cache import collate_direct_bridge_token_cache_samples
 from himem_bridge_vla.dataset.memory_token_cache import collate_memory_token_cache_samples
-from himem_bridge_vla.dataset.memory_token_cache import memory_read_result_from_token_cache_sample
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -68,6 +69,7 @@ def test_build_memory_replay_token_cache_writes_libero_shards_and_manifest(tmp_p
     assert sample["short_mask"].tolist() == [False, True]
     assert sample["current_state"].shape == (8,)
     assert sample["future_actions"].shape == (2, 7)
+    assert sample["prompt"] == "pick up the test cup"
 
 
 def test_build_memory_replay_token_cache_writes_rmbench_multi_view_tokens(tmp_path):
@@ -110,7 +112,7 @@ def test_build_memory_replay_token_cache_writes_rmbench_multi_view_tokens(tmp_pa
     assert sample["future_actions"].shape == (3, 14)
 
 
-def test_memory_token_cache_dataset_reads_shards_and_builds_short_memory(tmp_path):
+def test_memory_token_cache_dataset_reads_shards_and_collates_short_visual_tokens(tmp_path):
     libero_root = tmp_path / "libero" / "datasets"
     _write_libero_episode(libero_root / "libero_spatial" / "pick_demo.hdf5")
     rows = [
@@ -142,21 +144,116 @@ def test_memory_token_cache_dataset_reads_shards_and_builds_short_memory(tmp_pat
 
     dataset = MemoryTokenCacheDataset(result.output_root)
     sample = dataset[1]
-    memory = memory_read_result_from_token_cache_sample(sample)
     batch = collate_memory_token_cache_samples([dataset[0], sample])
 
     assert len(dataset) == 2
     assert dataset.config.hidden_dim == 8
     assert sample["sample_index"] == 1
     assert sample["short_steps"].tolist() == [-1, 1]
-    assert memory.entry_mask.tolist() == [False, True]
-    assert memory.entries[0] is None
-    assert memory.entries[1].tau == 1
-    assert memory.entries[1].eta == "S"
+    assert sample["short_mask"].tolist() == [False, True]
+    assert tuple(sample["executed_actions"].shape) == (16, 7)
+    assert tuple(sample["executed_action_mask"].shape) == (16,)
+    assert sample["executed_action_mask"].sum().item() == 2
+    assert sample["short_tokens_by_view"][0] is None
+    assert sample["short_tokens_by_view"][1]["agentview_rgb"].shape == (1, 8)
     assert batch["current_step"].tolist() == [0, 2]
     assert tuple(batch["future_actions"].shape) == (2, 2, 7)
     assert batch["action_mask"].tolist() == [[True, True], [True, True]]
-    assert batch["short_memory"][1].entries[1].tau == 1
+    assert batch["short_mask"].tolist() == [[False, False], [False, True]]
+    assert batch["short_tokens_by_view"][1][1]["eye_in_hand_rgb"].shape == (1, 8)
+
+    direct_batch = collate_direct_bridge_token_cache_samples(
+        [dataset[0], sample],
+        memory_entry_tokens=16,
+        action_horizon=4,
+    )
+    assert tuple(direct_batch["fused_tokens"].shape) == (2, 2, 8)
+    assert tuple(direct_batch["memory_context"].shape) == (2, 32, 8)
+    assert tuple(direct_batch["memory_context_mask"].shape) == (2, 32)
+    assert tuple(direct_batch["short_memory_time_ids"].shape) == (2, 32)
+    assert tuple(direct_batch["executed_actions"].shape) == (2, 16, 7)
+    assert tuple(direct_batch["executed_action_mask"].shape) == (2, 16)
+    assert direct_batch["memory_context_mask"][0].sum().item() == 0
+    assert direct_batch["memory_context_mask"][1].sum().item() == 2
+    assert direct_batch["short_memory_time_ids"][1].tolist() == [0] * 16 + [1] * 16
+    assert tuple(direct_batch["actions"].shape) == (2, 4, 7)
+    assert tuple(direct_batch["action_mask"].shape) == (2, 4, 7)
+    assert direct_batch["action_mask"][:, :2].all().item()
+    assert not direct_batch["action_mask"][:, 2:].any().item()
+
+
+def test_direct_bridge_collate_preserves_optional_vlm_hidden_states():
+    samples = [
+        {
+            "sample_index": index,
+            "benchmark": "LIBERO",
+            "episode_id": f"episode_{index}",
+            "current_step": index,
+            "current_tokens_by_view": {"agentview_rgb": torch.randn(2, 8)},
+            "current_hidden_states": tuple(torch.randn(2, 8) for _ in range(4)),
+            "current_state": torch.randn(5),
+            "short_tokens_by_view": (),
+            "short_steps": [],
+            "short_mask": [],
+            "future_actions": torch.randn(3, 7),
+            "action_valid_count": 3,
+        }
+        for index in range(2)
+    ]
+
+    batch = collate_direct_bridge_token_cache_samples(samples, action_horizon=3)
+
+    assert "vlm_hidden_states" in batch
+    assert len(batch["vlm_hidden_states"]) == 4
+    assert [tuple(hidden.shape) for hidden in batch["vlm_hidden_states"]] == [(2, 2, 8)] * 4
+
+
+def test_build_memory_replay_token_cache_can_write_vlm_hidden_states(tmp_path):
+    libero_root = tmp_path / "libero" / "datasets"
+    _write_libero_episode(libero_root / "libero_spatial" / "pick_demo.hdf5")
+    index_path = write_memory_replay_jsonl(
+        tmp_path / "libero_index.jsonl",
+        [
+            {
+                "benchmark": "LIBERO",
+                "episode_id": "libero_spatial:pick_demo:demo_0",
+                "episode_key": "demo_0",
+                "source_path": "libero_spatial/pick_demo.hdf5",
+                "current_step": 2,
+                "episode_length": 6,
+                "action_start": 2,
+                "action_end": 5,
+                "action_valid_count": 3,
+                "short_steps": [0, 1],
+                "short_mask": [True, True],
+            }
+        ],
+    )
+
+    result = build_memory_replay_token_cache(
+        benchmark="LIBERO",
+        data_root=libero_root,
+        index_path=index_path,
+        output_root=tmp_path / "libero_tokens",
+        encoder=ImageStatsVisualTokenEncoder(hidden_dim=8, tokens_per_view=2),
+        hidden_state_encoder=ImageStatsVLMHiddenStateEncoder(
+            hidden_dim=8,
+            tokens_per_view=2,
+            selected_layers=(3, 6, 9, 12),
+        ),
+        storage_dtype="float32",
+    )
+
+    manifest = json.loads(result.manifest_path.read_text(encoding="utf-8"))
+    sample = MemoryTokenCacheDataset(result.output_root)[0]
+    batch = collate_direct_bridge_token_cache_samples([sample], action_horizon=3)
+
+    assert manifest["hidden_state_encoder"] == "image_stats_vlm_hidden_states"
+    assert manifest["hidden_state_layers"] == [3, 6, 9, 12]
+    assert sample["prompt"] == "pick up the test cup"
+    assert len(sample["current_hidden_states"]) == 4
+    assert [tuple(hidden.shape) for hidden in sample["current_hidden_states"]] == [(4, 8)] * 4
+    assert [tuple(hidden.shape) for hidden in batch["vlm_hidden_states"]] == [(1, 4, 8)] * 4
 
 
 def test_build_memory_replay_token_cache_cli_image_stats_smoke(tmp_path):
@@ -213,7 +310,9 @@ def _write_libero_episode(path):
     images = np.zeros((6, 2, 3, 3), dtype=np.uint8)
     images[:, :, :, 0] = np.arange(6, dtype=np.uint8).reshape(6, 1, 1)
     with h5py.File(path, "w") as handle:
-        demo = handle.create_group("data/demo_0")
+        data = handle.create_group("data")
+        data.attrs["problem_info"] = json.dumps({"language_instruction": "pick up the test cup"})
+        demo = data.create_group("demo_0")
         demo.create_dataset("actions", data=np.arange(42, dtype=np.float32).reshape(6, 7))
         demo.create_dataset("obs/agentview_rgb", data=images)
         demo.create_dataset("obs/eye_in_hand_rgb", data=images + 1)

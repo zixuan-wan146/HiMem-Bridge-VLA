@@ -1,4 +1,5 @@
 import logging
+from pathlib import Path
 from types import SimpleNamespace
 from typing import List, Tuple, Union
 
@@ -12,12 +13,14 @@ try:
     from .bridge import BridgeAdapter, BridgeAdapterConfig, BridgeAdapterOutput
     from .internvl3.internvl3_embedder import InternVL3Embedder, InternVL3EmbeddingOutput
     from .planner import CoarsePlanner, CoarsePlannerConfig, CoarsePlannerOutput
+    from .planner import ProgressPlannerOutput, ProgressState, ProgressStateConfig, ProgressStatePlanner
 except ImportError:
     from himem_bridge_vla.experiment_config import resolve_experiment_config
     from himem_bridge_vla.model.action_head.flow_matching import FlowmatchingActionHead
     from himem_bridge_vla.model.bridge import BridgeAdapter, BridgeAdapterConfig, BridgeAdapterOutput
     from himem_bridge_vla.model.internvl3.internvl3_embedder import InternVL3Embedder, InternVL3EmbeddingOutput
     from himem_bridge_vla.model.planner import CoarsePlanner, CoarsePlannerConfig, CoarsePlannerOutput
+    from himem_bridge_vla.model.planner import ProgressPlannerOutput, ProgressState, ProgressStateConfig, ProgressStatePlanner
 
 
 class HiMemBridgeVLA(nn.Module):
@@ -59,6 +62,7 @@ class HiMemBridgeVLA(nn.Module):
         action_head_config = SimpleNamespace(
             embed_dim=config.get("embed_dim", 896),
             hidden_dim=config.get("hidden_dim", 1024),
+            ffn_dim=config.get("action_head_ffn_dim", config.get("embed_dim", 896) * 4),
             action_dim=action_dim,
             horizon=horizon,
             per_action_dim=per_action_dim,
@@ -67,24 +71,33 @@ class HiMemBridgeVLA(nn.Module):
             num_heads=config.get("num_heads", 8),
             num_layers=config.get("num_layers", 8),
             dropout=config.get("dropout", 0.0),
-            num_inference_timesteps=config.get("num_inference_timesteps", 50),
+            num_inference_timesteps=config.get("num_inference_timesteps", 15),
             num_categories=config.get("num_categories", 1),
+            num_plan_slots=config.get("num_plan_slots", 8),
+            visual_gate_lambda=config.get("visual_gate_lambda", 0.5),
+            plan_gate_lambda=config.get("plan_gate_lambda", 0.25),
+            short_memory_time_bins=config.get("short_memory_time_bins", 2),
+            max_vlm_tokens=config.get("max_vlm_tokens", None),
         )
         self.action_head = FlowmatchingActionHead(config=action_head_config).to(self._device)
         self.use_bridge = bool(config.get("use_bridge", False))
         self.bridge_variant = str(config.get("bridge_variant", "crosskv"))
+        self.use_direct_bridge = self.use_bridge and self.bridge_variant == "direct"
         self.bridge_context_mode = str(
             config.get("bridge_context_mode", "bridge_residual" if self.use_bridge else "fused_only")
         )
         self.memory_placement = str(config.get("memory_placement", "crosskv"))
         self.bridge_adapter = None
         self.coarse_planner = None
+        self.progress_state_planner = None
+        self.runtime_progress_state: ProgressState | None = None
         self.skill_tokens = None
         self.fused_residual_gate = None
         self.last_bridge_output: BridgeAdapterOutput | None = None
         self.last_coarse_planner_output: CoarsePlannerOutput | None = None
+        self.last_progress_planner_output: ProgressPlannerOutput | None = None
 
-        if self.use_bridge:
+        if self.use_bridge and not self.use_direct_bridge:
             if self.bridge_context_mode not in {
                 "fused_only",
                 "bridge_clean",
@@ -117,6 +130,8 @@ class HiMemBridgeVLA(nn.Module):
                 nn.init.normal_(self.skill_tokens, mean=0.0, std=0.02)
 
         if bool(config.get("coarse_planner_enabled", False)):
+            if bool(config.get("progress_planner_enabled", False)):
+                raise ValueError("coarse_planner_enabled and progress_planner_enabled are mutually exclusive")
             if not self.use_bridge:
                 raise ValueError("coarse_planner_enabled requires use_bridge=true")
             if bool(config.get("coarse_planner_input_memory", False)):
@@ -133,6 +148,13 @@ class HiMemBridgeVLA(nn.Module):
                 dropout=config.get("coarse_planner_dropout", config.get("dropout", 0.05)),
             )
             self.coarse_planner = CoarsePlanner(planner_config).to(self._device)
+
+        if bool(config.get("progress_planner_enabled", False)) or config.get("progress_planner_checkpoint"):
+            if self.coarse_planner is not None:
+                raise ValueError("progress_planner and coarse_planner are mutually exclusive")
+            if not self.use_direct_bridge:
+                raise ValueError("progress planner integration requires bridge.variant=direct")
+            self.progress_state_planner = self._build_progress_state_planner(config).to(self._device)
 
     def get_vl_embeddings(
         self,
@@ -180,10 +202,71 @@ class HiMemBridgeVLA(nn.Module):
         hidden_states: list[torch.Tensor] | None = None,
         memory_context: torch.Tensor | None = None,
         memory_context_mask: torch.Tensor | None = None,
+        short_memory_time_ids: torch.Tensor | None = None,
+        executed_actions: torch.Tensor | None = None,
+        executed_action_mask: torch.Tensor | None = None,
+        progress_state: ProgressState | torch.Tensor | None = None,
         planner_fused_tokens: torch.Tensor | None = None,
+        planner_vl_summary: torch.Tensor | None = None,
         planner_state: torch.Tensor | None = None,
         plan_token_mask: torch.Tensor | None = None,
     ) -> Union[torch.Tensor, Tuple[torch.Tensor, torch.Tensor]]:
+        if self.use_direct_bridge:
+            plan_tokens = None
+            if self.coarse_planner is not None:
+                if state is None:
+                    raise ValueError("state is required when Coarse Planner is enabled")
+                plan_tokens = self._get_or_update_plan_tokens(
+                    fused_tokens,
+                    state,
+                    planner_fused_tokens=planner_fused_tokens,
+                    planner_state=planner_state,
+                )
+            elif self.progress_state_planner is not None:
+                plan_tokens = self._get_or_update_progress_plan_tokens(
+                    fused_tokens,
+                    state,
+                    executed_actions=executed_actions,
+                    executed_action_mask=executed_action_mask,
+                    progress_state=progress_state,
+                    planner_fused_tokens=planner_fused_tokens,
+                    planner_vl_summary=planner_vl_summary,
+                    planner_state=planner_state,
+                )
+            else:
+                self.last_coarse_planner_output = None
+                self.last_progress_planner_output = None
+            self.last_bridge_output = None
+            short_memory_time_ids = self._resolve_short_memory_time_ids(memory_context, short_memory_time_ids)
+
+            if actions_gt is None:
+                return self.action_head.get_action(
+                    fused_tokens,
+                    state=state,
+                    action_mask=action_mask,
+                    embodiment_id=embodiment_ids,
+                    vlm_hidden_states=hidden_states,
+                    short_memory_tokens=memory_context,
+                    short_memory_time_ids=short_memory_time_ids,
+                    short_memory_mask=memory_context_mask,
+                    plan_tokens=plan_tokens,
+                    plan_token_mask=plan_token_mask,
+                )
+
+            return self.action_head(
+                fused_tokens,
+                state=state,
+                actions_gt=actions_gt,
+                action_mask=action_mask,
+                embodiment_id=embodiment_ids,
+                vlm_hidden_states=hidden_states,
+                short_memory_tokens=memory_context,
+                short_memory_time_ids=short_memory_time_ids,
+                short_memory_mask=memory_context_mask,
+                plan_tokens=plan_tokens,
+                plan_token_mask=plan_token_mask,
+            )
+
         fused_tokens = self._augment_context_with_bridge(
             fused_tokens,
             state=state,
@@ -253,8 +336,13 @@ class HiMemBridgeVLA(nn.Module):
         hidden_states=None,
         memory_context=None,
         memory_context_mask=None,
+        short_memory_time_ids=None,
         planner_fused_tokens=None,
+        planner_vl_summary=None,
         planner_state=None,
+        executed_actions=None,
+        executed_action_mask=None,
+        progress_state=None,
         plan_token_mask=None,
     ):
         return self.predict_action(
@@ -266,7 +354,12 @@ class HiMemBridgeVLA(nn.Module):
             hidden_states=hidden_states,
             memory_context=memory_context,
             memory_context_mask=memory_context_mask,
+            short_memory_time_ids=short_memory_time_ids,
+            executed_actions=executed_actions,
+            executed_action_mask=executed_action_mask,
+            progress_state=progress_state,
             planner_fused_tokens=planner_fused_tokens,
+            planner_vl_summary=planner_vl_summary,
             planner_state=planner_state,
             plan_token_mask=plan_token_mask,
         )
@@ -300,6 +393,7 @@ class HiMemBridgeVLA(nn.Module):
             )
         else:
             self.last_coarse_planner_output = None
+            self.last_progress_planner_output = None
 
         bridge_output = self.bridge_adapter(
             fused_tokens,
@@ -364,6 +458,145 @@ class HiMemBridgeVLA(nn.Module):
         self.last_coarse_planner_output = self.coarse_planner(planner_fused_tokens, planner_state)
         return self.last_coarse_planner_output.plan_tokens
 
+    def _get_or_update_progress_plan_tokens(
+        self,
+        fused_tokens: torch.Tensor,
+        state: torch.Tensor | None,
+        *,
+        executed_actions: torch.Tensor | None,
+        executed_action_mask: torch.Tensor | None,
+        progress_state: ProgressState | torch.Tensor | None = None,
+        planner_fused_tokens: torch.Tensor | None = None,
+        planner_vl_summary: torch.Tensor | None = None,
+        planner_state: torch.Tensor | None = None,
+    ) -> torch.Tensor:
+        if self.progress_state_planner is None:
+            raise RuntimeError("progress state planner is not initialized")
+        if state is None:
+            raise ValueError("state is required when progress planner is enabled")
+        if executed_actions is None:
+            raise ValueError("executed_actions is required when progress planner is enabled")
+
+        planner_state = state if planner_state is None else planner_state
+        vl_summary = self._resolve_progress_vl_summary(
+            fused_tokens,
+            planner_fused_tokens=planner_fused_tokens,
+            planner_vl_summary=planner_vl_summary,
+        )
+        batch_size = int(vl_summary.shape[0])
+        previous_state = self._resolve_progress_state(progress_state, batch_size, vl_summary.device, vl_summary.dtype)
+        output = self.progress_state_planner.forward_step(
+            previous_state,
+            vl_summary,
+            planner_state,
+            executed_actions,
+            executed_action_mask,
+        )
+        self.last_progress_planner_output = output
+        self.last_coarse_planner_output = None
+        if not self.training:
+            self.runtime_progress_state = ProgressState(
+                completed_events=output.progress_state.completed_events.detach(),
+                current_stage=output.progress_state.current_stage.detach(),
+            )
+        return output.planner_token
+
+    def _resolve_progress_vl_summary(
+        self,
+        fused_tokens: torch.Tensor,
+        *,
+        planner_fused_tokens: torch.Tensor | None = None,
+        planner_vl_summary: torch.Tensor | None = None,
+    ) -> torch.Tensor:
+        if self.progress_state_planner is None:
+            raise RuntimeError("progress state planner is not initialized")
+        hidden_dim = int(self.progress_state_planner.config.hidden_dim)
+        if planner_vl_summary is not None:
+            if planner_vl_summary.ndim == 3 and planner_vl_summary.shape[1] == 1:
+                planner_vl_summary = planner_vl_summary.squeeze(1)
+            if planner_vl_summary.ndim != 2 or planner_vl_summary.shape[-1] != hidden_dim:
+                raise ValueError(
+                    "planner_vl_summary must have shape "
+                    f"[B, {hidden_dim}] or [B, 1, {hidden_dim}], got {tuple(planner_vl_summary.shape)}"
+                )
+            return planner_vl_summary.to(device=fused_tokens.device, dtype=fused_tokens.dtype)
+
+        planner_tokens = fused_tokens if planner_fused_tokens is None else planner_fused_tokens
+        planner_tokens = _ensure_rank3(planner_tokens, "planner_fused_tokens").to(
+            device=fused_tokens.device,
+            dtype=fused_tokens.dtype,
+        )
+        if planner_tokens.shape[-1] != hidden_dim:
+            raise ValueError(f"planner_fused_tokens last dim {planner_tokens.shape[-1]} != {hidden_dim}")
+        return planner_tokens.mean(dim=1)
+
+    def _resolve_progress_state(
+        self,
+        progress_state: ProgressState | torch.Tensor | None,
+        batch_size: int,
+        device: torch.device,
+        dtype: torch.dtype,
+    ) -> ProgressState | torch.Tensor:
+        if progress_state is not None:
+            return progress_state
+        if not self.training and self.runtime_progress_state is not None:
+            if self.runtime_progress_state.completed_events.shape[0] == batch_size:
+                return self.runtime_progress_state
+        if self.progress_state_planner is None:
+            raise RuntimeError("progress state planner is not initialized")
+        return self.progress_state_planner.initial_state(batch_size, device=device, dtype=dtype)
+
+    def reset_progress_state(self) -> None:
+        self.runtime_progress_state = None
+        self.last_progress_planner_output = None
+
+    def _build_progress_state_planner(self, config: dict) -> ProgressStatePlanner:
+        checkpoint = None
+        checkpoint_path = config.get("progress_planner_checkpoint")
+        if checkpoint_path:
+            checkpoint_file = Path(str(checkpoint_path)).expanduser()
+            checkpoint = torch.load(checkpoint_file, map_location="cpu", weights_only=False)
+            if checkpoint.get("format") != "progress_state_planner_warmup":
+                raise ValueError(f"invalid progress planner checkpoint format: {checkpoint.get('format')!r}")
+        if checkpoint is not None:
+            model_config = dict(checkpoint.get("model_config") or {})
+            if not model_config:
+                raise KeyError(f"progress planner checkpoint lacks model_config: {checkpoint_path}")
+        else:
+            model_config = {
+                key.removeprefix("progress_planner_"): value
+                for key, value in config.items()
+                if key.startswith("progress_planner_")
+                and key not in {"progress_planner_enabled", "progress_planner_checkpoint"}
+            }
+            model_config.setdefault("hidden_dim", config.get("embed_dim", 896))
+            model_config.setdefault("state_dim", config.get("state_dim", 7))
+            model_config.setdefault("action_dim", config.get("per_action_dim", 7))
+            model_config.setdefault("replan_stride", config.get("progress_planner_replan_stride", 16))
+        planner = ProgressStatePlanner(ProgressStateConfig(**model_config))
+        if checkpoint is not None:
+            planner.load_state_dict(checkpoint["model_state_dict"])
+        return planner
+
+    def _resolve_short_memory_time_ids(
+        self,
+        memory_context: torch.Tensor | None,
+        short_memory_time_ids: torch.Tensor | None,
+    ) -> torch.Tensor | None:
+        if short_memory_time_ids is not None or memory_context is None:
+            return short_memory_time_ids
+        memory_context = _ensure_rank3(memory_context, "memory_context")
+        entry_tokens = int(self.config.get("memory_entry_tokens", 16))
+        capacity = int(self.config.get("memory_short_capacity", 2))
+        if entry_tokens <= 0 or capacity <= 0:
+            return None
+        expected_tokens = entry_tokens * capacity
+        if memory_context.shape[1] != expected_tokens:
+            return None
+        time_ids = torch.arange(capacity, device=memory_context.device, dtype=torch.long)
+        time_ids = time_ids.repeat_interleave(entry_tokens)
+        return time_ids.unsqueeze(0).expand(memory_context.shape[0], -1)
+
     def _freeze_module(self, module: nn.Module, name: str):
         logging.info(f"Freezing {name} parameters...")
         for param in module.parameters():
@@ -382,6 +615,8 @@ class HiMemBridgeVLA(nn.Module):
 
         if self.coarse_planner is not None and not self.config.get("finetune_coarse_planner", True):
             self._freeze_module(self.coarse_planner, "Coarse Planner")
+        if self.progress_state_planner is not None and not self.config.get("finetune_progress_planner", False):
+            self._freeze_module(self.progress_state_planner, "Progress-State Planner")
 
 
 def _ensure_rank3(tensor: torch.Tensor, name: str) -> torch.Tensor:

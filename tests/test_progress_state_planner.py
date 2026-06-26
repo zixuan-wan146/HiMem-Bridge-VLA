@@ -7,6 +7,7 @@ from himem_bridge_vla.model.planner import ProgressStateConfig
 from himem_bridge_vla.model.planner import ProgressStatePlanner
 from himem_bridge_vla.model.planner import progress_diagnostics
 from himem_bridge_vla.model.planner import progress_warmup_loss
+from himem_bridge_vla.model.himem_bridge_vla import HiMemBridgeVLA
 
 
 def test_progress_state_planner_shapes_and_loss():
@@ -75,3 +76,73 @@ def test_action_summary_zero_mask_outputs_zero():
         torch.zeros(2, 3, dtype=torch.bool),
     )
     assert torch.allclose(summary, torch.zeros_like(summary))
+
+
+def test_himem_bridge_vla_progress_planner_helper_outputs_plan_token():
+    config = ProgressStateConfig(
+        hidden_dim=16,
+        state_dim=5,
+        action_dim=3,
+        replan_stride=4,
+        latent_dim=6,
+        action_summary_hidden_dim=8,
+        state_hidden_dim=8,
+        updater_hidden_dim=32,
+        planner_ffn_dim=32,
+        planner_layers=1,
+        num_heads=4,
+        dropout=0.0,
+    )
+    policy = HiMemBridgeVLA.__new__(HiMemBridgeVLA)
+    torch.nn.Module.__init__(policy)
+    policy.progress_state_planner = ProgressStatePlanner(config)
+    policy.runtime_progress_state = None
+    policy.last_progress_planner_output = None
+    policy.last_coarse_planner_output = None
+    policy.train()
+
+    plan = policy._get_or_update_progress_plan_tokens(
+        torch.randn(2, 5, 16),
+        torch.randn(2, 5),
+        executed_actions=torch.randn(2, 4, 3),
+        executed_action_mask=torch.ones(2, 4, dtype=torch.bool),
+    )
+
+    assert tuple(plan.shape) == (2, 1, 16)
+    assert policy.last_progress_planner_output is not None
+    assert tuple(policy.last_progress_planner_output.progress_state.tokens.shape) == (2, 2, 16)
+
+
+def test_himem_bridge_vla_progress_planner_accepts_explicit_vl_summary():
+    config = ProgressStateConfig(
+        hidden_dim=16,
+        state_dim=5,
+        action_dim=3,
+        replan_stride=4,
+        latent_dim=6,
+        action_summary_hidden_dim=8,
+        state_hidden_dim=8,
+        updater_hidden_dim=32,
+        planner_ffn_dim=32,
+        planner_layers=1,
+        num_heads=4,
+        dropout=0.0,
+    )
+    policy = HiMemBridgeVLA.__new__(HiMemBridgeVLA)
+    torch.nn.Module.__init__(policy)
+    policy.progress_state_planner = ProgressStatePlanner(config)
+    policy.runtime_progress_state = None
+    policy.last_progress_planner_output = None
+    policy.last_coarse_planner_output = None
+    policy.train()
+
+    plan = policy._get_or_update_progress_plan_tokens(
+        torch.randn(2, 5, 16),
+        torch.randn(2, 5),
+        executed_actions=torch.randn(2, 4, 3),
+        executed_action_mask=torch.ones(2, 4, dtype=torch.bool),
+        planner_fused_tokens=torch.randn(2, 5, 8),
+        planner_vl_summary=torch.randn(2, 16),
+    )
+
+    assert tuple(plan.shape) == (2, 1, 16)

@@ -158,71 +158,76 @@ $$
 
 ## 4. VL 表征
 
-当前直接使用最后一层 VL hidden states：
-
-$$
-F_k =
-\operatorname{VL}^{(L)}
-(
-o_{t_k},\ \text{instruction}
-)
-$$
-
-保留 token sequence：
-
-$$
-F_k \in \mathbb{R}^{N \times 896}
-$$
-
-long memory 更新和 planner 都只使用全局进展证据向量，因此对 `F_k` 做 8-head attention pooling。
-
-先投影：
-
-$$
-K^h_k = F_k W^h_K
-$$
-
-$$
-V^h_k = F_k W^h_V
-$$
-
-使用可学习 query：
-
-$$
-q_h \in \mathbb{R}^{8 \times 112}
-$$
-
-每个 head 独立 pooling：
-
-$$
-\alpha^j_k =
-\operatorname{softmax}
-\left(
-\frac{q^j_h (K^{h,j}_k)^\top}{\sqrt{112}}
-\right)
-$$
-
-$$
-h^j_k = \alpha^j_k V^{h,j}_k
-$$
-
-拼接并投影：
-
-$$
-h_k =
-\operatorname{LN}
-\left(
-W^h_O [h^1_k,\ldots,h^8_k]
-\right)
-$$
-
-其中：
+progress-state planner 只消费一个 VL summary：
 
 $$
 h_k \in \mathbb{R}^{896}
 $$
 
-warm-up 阶段不缓存完整 `F_k`。离线构建 warm-up cache 时用 `F_k` 生成 `h_k`，然后只保存 `h_k`。完整 token sequence 占用空间大，且当前 warm-up 的 updater 和 planner 都不直接读取完整 `F_k`。
+warm-up cache 中的 `h_k` 由 `InternVL3VLSummaryEncoder` 固定生成。设最后一层 language hidden states 为：
+
+$$
+F_k^{final}
+=
+\operatorname{InternVL3}^{final}
+(
+o_{t_k},\ \text{instruction}
+)
+$$
+
+其中：
+
+$$
+F_k^{final}
+\in
+\mathbb{R}^{N \times 896}
+$$
+
+设 attention mask 为：
+
+$$
+m_k \in \{0,1\}^{N}
+$$
+
+取最后一个有效 token index：
+
+$$
+i_k =
+\max
+\{i \mid m_{k,i}=1\}
+$$
+
+warm-up cache 保存：
+
+$$
+h_k =
+F^{final}_{k,i_k}
+$$
+
+因此 warm-up 阶段不缓存完整 `F_k`。cache 只保存：
+
+```text
+vl_summary = h_k: [896]
+```
+
+direct bridge-attn 的 raw VLM features 是另一条路径。policy action head 使用多层 token hidden states：
+
+$$
+\mathcal{L}_{vlm}
+=
+\{3,6,9,12\}
+$$
+
+这些 token hidden states 进入 visual branch，不进入 progress-state planner。progress planner 的 runtime 接口优先使用显式 `planner_vl_summary`。如果没有显式 summary，代码会对提供的 `planner_fused_tokens` 做确定性 mean pooling：
+
+$$
+h_k =
+\frac{1}{N}
+\sum_{i=1}^{N}
+F_{k,i}
+$$
+
+这个 fallback 只用于没有单独 summary 的 visual-token cache 或 smoke path。正式复用 warm-up 分布时，应直接传入 `planner_vl_summary`。
 
 ## 5. 已执行动作摘要
 
@@ -1025,7 +1030,7 @@ planner_token = 1
 
 ```text
 LIBERO W=4:
-  cache: /root/autodl-tmp/token_caches/libero_progress_vl_embedding_h32_r16_w4
+  cache: $AUTODL_TMP/token_caches/libero_progress_vl_embedding_h32_r16_w4
   step_count:   18199
   window_count: 12199
   suite_window_counts:
@@ -1034,13 +1039,23 @@ LIBERO W=4:
     libero_object:  2421
     libero_spatial: 1646
 
+LIBERO W=8:
+  cache: $AUTODL_TMP/token_caches/libero_progress_vl_embedding_h32_r16_w8
+  step_count:   18199
+  window_count: 5429
+  suite_window_counts:
+    libero_10:      4391
+    libero_goal:    430
+    libero_object:  481
+    libero_spatial: 127
+
 RMBench W=4:
-  cache: /root/autodl-tmp/token_caches/rmbench_progress_vl_embedding_h32_r16_w4
+  cache: $AUTODL_TMP/token_caches/rmbench_progress_vl_embedding_h32_r16_w4
   step_count:   16676
   window_count: 15326
 
 RMBench W=8:
-  cache: /root/autodl-tmp/token_caches/rmbench_progress_vl_embedding_h32_r16_w8
+  cache: $AUTODL_TMP/token_caches/rmbench_progress_vl_embedding_h32_r16_w8
   step_count:   16676
   window_count: 13526
 ```
@@ -1060,7 +1075,7 @@ target_intent: [128], float32
 ### 13.2 RMBench Intent AE
 
 ```text
-run: /root/autodl-tmp/runs/progress_warmup/rmbench_h32_intent_ae_v1
+run: $AUTODL_TMP/runs/progress_warmup/rmbench_h32_intent_ae_v1
 action_dim: 14
 horizon: 32
 latent_dim: 128
@@ -1074,7 +1089,7 @@ val_segment_ae_rec_loss: 0.014776
 
 ```text
 LIBERO W=4:
-  run: /root/autodl-tmp/runs/progress_warmup/libero_progress_state_planner_h32_r16_w4_bs12800_epval_v1
+  run: $AUTODL_TMP/runs/progress_warmup/libero_progress_state_planner_h32_r16_w4_bs12800_epval_v1
   best step: 310
   val_loss: 0.017872
   val_plan_loss: 0.011099
@@ -1083,8 +1098,18 @@ LIBERO W=4:
   val_cos_g_p: -0.021132
   val_stage_effective_rank: 118.357338
 
+LIBERO W=8:
+  run: $AUTODL_TMP/runs/progress_warmup/libero_progress_state_planner_h32_r16_bs6656_epval_v1
+  best step: 280
+  val_loss: 0.021811
+  val_plan_loss: 0.013405
+  val_stage_loss: 0.013884
+  val_mem_pool_loss: 0.014639
+  val_cos_g_p: -0.023982
+  val_stage_effective_rank: 78.541298
+
 RMBench W=4:
-  run: /root/autodl-tmp/runs/progress_warmup/rmbench_progress_state_planner_h32_r16_w4_bs12800_epval_v1
+  run: $AUTODL_TMP/runs/progress_warmup/rmbench_progress_state_planner_h32_r16_w4_bs12800_epval_v1
   best step: 590
   val_loss: 0.001225
   val_plan_loss: 0.000732
@@ -1094,8 +1119,9 @@ RMBench W=4:
   val_stage_effective_rank: 93.020485
 
 RMBench W=8:
-  run: /root/autodl-tmp/runs/progress_warmup/rmbench_progress_state_planner_h32_r16_w8_bs6656_epval_v1
-  stopped after: step_000700.pt
+  run: $AUTODL_TMP/runs/progress_warmup/rmbench_progress_state_planner_h32_r16_w8_bs6656_epval_v1
+  stopped after: step 700
+  per-step checkpoints: pruned after summary generation
   best step: 660
   val_loss: 0.001016
   val_plan_loss: 0.000563

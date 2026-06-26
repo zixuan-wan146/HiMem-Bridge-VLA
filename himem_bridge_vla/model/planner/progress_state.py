@@ -77,12 +77,16 @@ class ActionSummaryEncoder(nn.Module):
             mask = torch.as_tensor(executed_mask, device=actions.device).bool()
             if mask.shape != actions.shape[:2]:
                 raise ValueError(f"executed_mask shape {tuple(mask.shape)} != {tuple(actions.shape[:2])}")
+        self._match_runtime_dtype(device=actions.device, dtype=actions.dtype)
         mask_value = mask.to(dtype=actions.dtype).unsqueeze(-1)
         masked_actions = actions * mask_value
         features = torch.cat([masked_actions, mask_value], dim=-1).reshape(actions.shape[0], -1)
         summary = self.encoder(features)
         has_any_action = mask.any(dim=1).to(dtype=summary.dtype).unsqueeze(-1)
         return summary * has_any_action
+
+    def _match_runtime_dtype(self, *, device: torch.device, dtype: torch.dtype) -> None:
+        self.encoder.to(device=device, dtype=dtype)
 
 
 class ProgressEvidenceEncoder(nn.Module):

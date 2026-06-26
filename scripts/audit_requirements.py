@@ -15,6 +15,9 @@ IGNORED_DISCOVERY_DIRS = {
     ".pytest_cache",
     "__pycache__",
     "exports",
+    "reference-paper",
+    "referen-repo",
+    "reference-repo",
 }
 
 

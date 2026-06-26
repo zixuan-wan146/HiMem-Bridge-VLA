@@ -5,37 +5,31 @@ from pathlib import Path
 from typing import Any, Mapping
 
 
-BRIDGE_VARIANTS = {"crosskv", "mixed_latent"}
+BRIDGE_VARIANTS = {"direct", "crosskv", "mixed_latent"}
 CONTEXT_MODES = {"fused_only", "bridge_clean", "bridge_residual", "bridge_gated_residual"}
-MEMORY_KINDS = {"dual_fifo_visual"}
-ACTION_QUERY_SOURCES = {"learned_bridge"}
+MEMORY_KINDS = {"fixed_recent_visual"}
 COARSE_PLANNER_TYPES = {"query_cross_attention"}
 COARSE_PLANNER_LOSSES = {"intent_latent"}
-COARSE_PLANNER_PLACEMENTS = {"bridge_crosskv"}
+COARSE_PLANNER_PLACEMENTS = {"direct_action_condition", "bridge_crosskv"}
 
 
 @dataclass(frozen=True)
 class VLMConfig:
     hidden_dim: int = 896
     raw_dim: int | None = None
-    raw_layers: tuple[int | str, ...] = (3, 7, 11, 14)
+    raw_layers: tuple[int | str, ...] = (3, 6, 9, 12)
     freeze: bool = True
     allow_image_token_truncation: bool = False
 
 
 @dataclass(frozen=True)
-class ActionQueryConfig:
-    source: str = "learned_bridge"
-    num_tokens: int = 64
-
-
-@dataclass(frozen=True)
 class BridgeConfig:
-    enabled: bool = False
-    variant: str = "crosskv"
-    num_layers: int = 4
+    enabled: bool = True
+    variant: str = "direct"
+    num_layers: int = 8
     num_heads: int = 8
-    num_action_tokens: int = 16
+    num_bridge_tokens: int = 16
+    num_action_queries: int = 64
     dropout: float = 0.0
     raw_gate_init: float = 0.0
     ffn_mult: int = 4
@@ -50,17 +44,17 @@ class ContextConfig:
 @dataclass(frozen=True)
 class ShortMemoryConfig:
     capacity: int = 2
-    offsets: tuple[int, ...] = (8, 16)
+    offsets: tuple[int, ...] = (16, 8)
 
 
 @dataclass(frozen=True)
 class LongMemoryConfig:
-    capacity: int = 4
+    capacity: int = 0
 
 
 @dataclass(frozen=True)
 class MemoryCompressionConfig:
-    entry_tokens: int = 1
+    entry_tokens: int = 16
     num_heads: int = 8
     dropout: float = 0.0
     max_age_steps: int = 512
@@ -69,7 +63,7 @@ class MemoryCompressionConfig:
 @dataclass(frozen=True)
 class MemoryConfig:
     enabled: bool = False
-    kind: str = "dual_fifo_visual"
+    kind: str = "fixed_recent_visual"
     hidden_dim: int = 896
     views: tuple[str, ...] = ("base", "wrist")
     short: ShortMemoryConfig = field(default_factory=ShortMemoryConfig)
@@ -103,8 +97,29 @@ class CoarsePlannerConfig:
     gripper_loss_weight: float = 2.0
     segment_autoencoder_checkpoint: str | None = None
     input_memory: bool = False
-    placement: str = "bridge_crosskv"
+    placement: str = "direct_action_condition"
     gripper_indices: tuple[int, ...] = (-1,)
+
+
+@dataclass(frozen=True)
+class ProgressPlannerConfig:
+    enabled: bool = False
+    checkpoint: str | None = None
+    finetune: bool = False
+    hidden_dim: int = 896
+    state_dim: int = 7
+    action_dim: int = 7
+    replan_stride: int = 16
+    latent_dim: int = 128
+    action_summary_hidden_dim: int = 512
+    state_hidden_dim: int = 512
+    updater_hidden_dim: int = 1792
+    planner_ffn_dim: int = 3584
+    planner_layers: int = 2
+    num_heads: int = 8
+    dropout: float = 0.05
+    completed_gate_bias: float = -2.0
+    stage_gate_bias: float = -1.0
 
 
 @dataclass(frozen=True)
@@ -113,6 +128,12 @@ class ActionHeadConfig:
     use_existing_checkpoint_config: bool = False
     horizon: int | None = 32
     per_action_dim: int | None = None
+    ffn_dim: int = 3584
+    num_plan_slots: int = 8
+    visual_gate_lambda: float = 0.5
+    plan_gate_lambda: float = 0.25
+    short_memory_time_bins: int = 2
+    max_vlm_tokens: int | None = None
 
 
 @dataclass(frozen=True)
@@ -120,12 +141,12 @@ class BridgeHiMemConfig:
     experiment_name: str = "bridge_himem"
     seed: int = 42
     vlm: VLMConfig = field(default_factory=VLMConfig)
-    action_query: ActionQueryConfig = field(default_factory=ActionQueryConfig)
     bridge: BridgeConfig = field(default_factory=BridgeConfig)
     context: ContextConfig = field(default_factory=ContextConfig)
     memory: MemoryConfig = field(default_factory=MemoryConfig)
     skill: SkillConfig = field(default_factory=SkillConfig)
     coarse_planner: CoarsePlannerConfig = field(default_factory=CoarsePlannerConfig)
+    progress_planner: ProgressPlannerConfig = field(default_factory=ProgressPlannerConfig)
     action_head: ActionHeadConfig = field(default_factory=ActionHeadConfig)
 
     @classmethod
@@ -137,7 +158,6 @@ class BridgeHiMemConfig:
             experiment_name=str(mapping.get("experiment_name", cls.experiment_name)),
             seed=_int(mapping.get("seed", cls.seed), "seed"),
             vlm=_build_dataclass(VLMConfig, mapping.get("vlm", {}), "vlm"),
-            action_query=_build_dataclass(ActionQueryConfig, mapping.get("action_query", {}), "action_query"),
             bridge=_build_dataclass(BridgeConfig, mapping.get("bridge", {}), "bridge"),
             context=_build_dataclass(ContextConfig, mapping.get("context", {}), "context"),
             memory=_build_memory_config(mapping.get("memory", {})),
@@ -146,6 +166,11 @@ class BridgeHiMemConfig:
                 CoarsePlannerConfig,
                 mapping.get("coarse_planner", {}),
                 "coarse_planner",
+            ),
+            progress_planner=_build_dataclass(
+                ProgressPlannerConfig,
+                mapping.get("progress_planner", {}),
+                "progress_planner",
             ),
             action_head=_build_dataclass(ActionHeadConfig, mapping.get("action_head", {}), "action_head"),
         )
@@ -159,15 +184,12 @@ class BridgeHiMemConfig:
         if len(self.vlm.raw_layers) == 0:
             raise ValueError("vlm.raw_layers must select at least one hidden-state layer")
 
-        if self.action_query.source not in ACTION_QUERY_SOURCES:
-            raise ValueError(f"action_query.source must be one of {sorted(ACTION_QUERY_SOURCES)}")
-        _positive_int(self.action_query.num_tokens, "action_query.num_tokens")
-
         if self.bridge.variant not in BRIDGE_VARIANTS:
             raise ValueError(f"bridge.variant must be one of {sorted(BRIDGE_VARIANTS)}")
         _positive_int(self.bridge.num_layers, "bridge.num_layers")
         _positive_int(self.bridge.num_heads, "bridge.num_heads")
-        _positive_int(self.bridge.num_action_tokens, "bridge.num_action_tokens")
+        _positive_int(self.bridge.num_bridge_tokens, "bridge.num_bridge_tokens")
+        _positive_int(self.bridge.num_action_queries, "bridge.num_action_queries")
         _positive_int(self.bridge.ffn_mult, "bridge.ffn_mult")
         _non_negative_float(self.bridge.dropout, "bridge.dropout")
         if self.vlm.hidden_dim % self.bridge.num_heads != 0:
@@ -187,6 +209,8 @@ class BridgeHiMemConfig:
         for offset in self.memory.short.offsets:
             _positive_int(offset, "memory.short.offsets")
         _non_negative_int(self.memory.long.capacity, "memory.long.capacity")
+        if self.memory.long.capacity != 0:
+            raise ValueError("memory.long.capacity must be 0; long memory is maintained by the progress-state planner")
         _positive_int(self.memory.compression.entry_tokens, "memory.compression.entry_tokens")
         _positive_int(self.memory.compression.num_heads, "memory.compression.num_heads")
         _non_negative_float(self.memory.compression.dropout, "memory.compression.dropout")
@@ -202,7 +226,7 @@ class BridgeHiMemConfig:
             raise ValueError("skill.enabled=true requires bridge.enabled=true")
         if self.skill.enabled and self.bridge.variant != "mixed_latent":
             raise ValueError("skill tokens are implemented for mixed_latent experiments only")
-        if self.context.mode == "fused_only" and self.memory.enabled:
+        if self.context.mode == "fused_only" and self.memory.enabled and self.bridge.variant != "direct":
             raise ValueError("context.mode=fused_only cannot expose memory to the action head")
 
         if self.coarse_planner.type not in COARSE_PLANNER_TYPES:
@@ -242,12 +266,41 @@ class BridgeHiMemConfig:
                 raise ValueError("coarse_planner.input_memory must remain false in the first version")
             if self.coarse_planner.planning_horizon % self.coarse_planner.num_plan_steps != 0:
                 raise ValueError("coarse_planner.planning_horizon must be divisible by num_plan_steps")
+
+        _positive_int(self.progress_planner.hidden_dim, "progress_planner.hidden_dim")
+        _positive_int(self.progress_planner.state_dim, "progress_planner.state_dim")
+        _positive_int(self.progress_planner.action_dim, "progress_planner.action_dim")
+        _positive_int(self.progress_planner.replan_stride, "progress_planner.replan_stride")
+        _positive_int(self.progress_planner.latent_dim, "progress_planner.latent_dim")
+        _positive_int(self.progress_planner.action_summary_hidden_dim, "progress_planner.action_summary_hidden_dim")
+        _positive_int(self.progress_planner.state_hidden_dim, "progress_planner.state_hidden_dim")
+        _positive_int(self.progress_planner.updater_hidden_dim, "progress_planner.updater_hidden_dim")
+        _positive_int(self.progress_planner.planner_ffn_dim, "progress_planner.planner_ffn_dim")
+        _positive_int(self.progress_planner.planner_layers, "progress_planner.planner_layers")
+        _positive_int(self.progress_planner.num_heads, "progress_planner.num_heads")
+        _non_negative_float(self.progress_planner.dropout, "progress_planner.dropout")
+        if self.progress_planner.enabled:
+            if self.coarse_planner.enabled:
+                raise ValueError("progress_planner.enabled and coarse_planner.enabled are mutually exclusive")
+            if not self.bridge.enabled or self.bridge.variant != "direct":
+                raise ValueError("progress_planner.enabled requires bridge.variant=direct")
+            if self.progress_planner.hidden_dim != self.vlm.hidden_dim:
+                raise ValueError("progress_planner.hidden_dim must match vlm.hidden_dim")
+            if self.progress_planner.hidden_dim % self.progress_planner.num_heads != 0:
+                raise ValueError("progress_planner.hidden_dim must be divisible by progress_planner.num_heads")
         if self.action_head.kind != "flowmatching":
             raise ValueError("action_head.kind must be 'flowmatching'")
         if self.action_head.horizon is not None:
             _positive_int(self.action_head.horizon, "action_head.horizon")
         if self.action_head.per_action_dim is not None:
             _positive_int(self.action_head.per_action_dim, "action_head.per_action_dim")
+        _positive_int(self.action_head.ffn_dim, "action_head.ffn_dim")
+        _positive_int(self.action_head.num_plan_slots, "action_head.num_plan_slots")
+        _positive_int(self.action_head.short_memory_time_bins, "action_head.short_memory_time_bins")
+        if self.action_head.max_vlm_tokens is not None:
+            _positive_int(self.action_head.max_vlm_tokens, "action_head.max_vlm_tokens")
+        _non_negative_float(self.action_head.visual_gate_lambda, "action_head.visual_gate_lambda")
+        _non_negative_float(self.action_head.plan_gate_lambda, "action_head.plan_gate_lambda")
 
     def to_legacy_model_config(self) -> dict[str, Any]:
         legacy: dict[str, Any] = {
@@ -262,8 +315,8 @@ class BridgeHiMemConfig:
             "allow_image_token_truncation": self.vlm.allow_image_token_truncation,
             "bridge_num_layers": self.bridge.num_layers,
             "bridge_num_heads": self.bridge.num_heads,
-            "bridge_num_tokens": self.bridge.num_action_tokens,
-            "bridge_num_action_queries": self.action_query.num_tokens,
+            "bridge_num_tokens": self.bridge.num_bridge_tokens,
+            "bridge_num_action_queries": self.bridge.num_action_queries,
             "bridge_dropout": self.bridge.dropout,
             "bridge_raw_gate_init": self.bridge.raw_gate_init,
             "bridge_ffn_mult": self.bridge.ffn_mult,
@@ -299,12 +352,37 @@ class BridgeHiMemConfig:
             "coarse_planner_input_memory": self.coarse_planner.input_memory,
             "coarse_planner_placement": self.coarse_planner.placement,
             "coarse_planner_gripper_indices": list(self.coarse_planner.gripper_indices),
+            "progress_planner_enabled": self.progress_planner.enabled,
+            "progress_planner_checkpoint": self.progress_planner.checkpoint,
+            "finetune_progress_planner": self.progress_planner.finetune,
+            "progress_planner_hidden_dim": self.progress_planner.hidden_dim,
+            "progress_planner_state_dim": self.progress_planner.state_dim,
+            "progress_planner_action_dim": self.progress_planner.action_dim,
+            "progress_planner_replan_stride": self.progress_planner.replan_stride,
+            "progress_planner_latent_dim": self.progress_planner.latent_dim,
+            "progress_planner_action_summary_hidden_dim": self.progress_planner.action_summary_hidden_dim,
+            "progress_planner_state_hidden_dim": self.progress_planner.state_hidden_dim,
+            "progress_planner_updater_hidden_dim": self.progress_planner.updater_hidden_dim,
+            "progress_planner_planner_ffn_dim": self.progress_planner.planner_ffn_dim,
+            "progress_planner_planner_layers": self.progress_planner.planner_layers,
+            "progress_planner_num_heads": self.progress_planner.num_heads,
+            "progress_planner_dropout": self.progress_planner.dropout,
+            "progress_planner_completed_gate_bias": self.progress_planner.completed_gate_bias,
+            "progress_planner_stage_gate_bias": self.progress_planner.stage_gate_bias,
+            "action_head_ffn_dim": self.action_head.ffn_dim,
+            "num_plan_slots": self.action_head.num_plan_slots,
+            "visual_gate_lambda": self.action_head.visual_gate_lambda,
+            "plan_gate_lambda": self.action_head.plan_gate_lambda,
+            "short_memory_time_bins": self.action_head.short_memory_time_bins,
+            "max_vlm_tokens": self.action_head.max_vlm_tokens,
         }
         if not self.action_head.use_existing_checkpoint_config:
             if self.action_head.horizon is not None:
                 legacy["horizon"] = self.action_head.horizon
             if self.action_head.per_action_dim is not None:
                 legacy["per_action_dim"] = self.action_head.per_action_dim
+        if self.bridge.variant == "direct":
+            legacy["num_layers"] = self.bridge.num_layers
         return legacy
 
     def to_dict(self) -> dict[str, Any]:
@@ -451,16 +529,27 @@ def _coerce_field_value(name: str, value: Any, label: str) -> Any:
         "num_tokens",
         "num_layers",
         "num_heads",
-        "num_action_tokens",
+        "num_bridge_tokens",
+        "num_action_queries",
         "ffn_mult",
         "horizon",
         "per_action_dim",
         "action_dim",
+        "ffn_dim",
+        "num_plan_slots",
+        "short_memory_time_bins",
+        "max_vlm_tokens",
         "latent_dim",
         "latent_head_hidden_dim",
         "segment_action_dim",
         "num_plan_steps",
         "planning_horizon",
+        "replan_stride",
+        "action_summary_hidden_dim",
+        "state_hidden_dim",
+        "updater_hidden_dim",
+        "planner_ffn_dim",
+        "planner_layers",
         "capacity",
         "entry_tokens",
         "max_age_steps",
@@ -475,9 +564,13 @@ def _coerce_field_value(name: str, value: Any, label: str) -> Any:
         "latent_loss_weight",
         "chunk_loss_weight",
         "gripper_loss_weight",
+        "visual_gate_lambda",
+        "plan_gate_lambda",
+        "completed_gate_bias",
+        "stage_gate_bias",
     }:
         return _float(value, label)
-    if name in {"enabled", "freeze", "use_existing_checkpoint_config", "input_memory"}:
+    if name in {"enabled", "freeze", "use_existing_checkpoint_config", "input_memory", "finetune"}:
         return _bool(value, label)
     if name == "raw_layers":
         return _coerce_raw_layers(value, label)
@@ -490,6 +583,7 @@ def _coerce_field_value(name: str, value: Any, label: str) -> Any:
         "kind",
         "type",
         "loss",
+        "checkpoint",
         "segment_autoencoder_checkpoint",
     }:
         return str(value)

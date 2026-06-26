@@ -145,6 +145,7 @@ def run_progress_warmup_training(
 
     history: list[dict[str, float | int]] = []
     best_loss = float("inf")
+    fallback_best_loss = float("inf")
     final_loss = float("nan")
     best_checkpoint_path = output_dir / "best.pt"
     data_iter = iter(dataloader)
@@ -195,6 +196,9 @@ def run_progress_warmup_training(
             if selection_loss < best_loss:
                 best_loss = selection_loss
                 _save_checkpoint(best_checkpoint_path, model, heads, optimizer, model_config, config, row)
+        elif not best_checkpoint_path.exists():
+            fallback_best_loss = final_loss
+            _save_checkpoint(best_checkpoint_path, model, heads, optimizer, model_config, config, row)
         if config.ckpt_interval > 0 and step % config.ckpt_interval == 0:
             _save_checkpoint(output_dir / f"step_{step:06d}.pt", model, heads, optimizer, model_config, config, row)
         if config.log_interval > 0 and step % config.log_interval == 0:
@@ -202,12 +206,13 @@ def run_progress_warmup_training(
 
     checkpoint_path = output_dir / "last.pt"
     _save_checkpoint(checkpoint_path, model, heads, optimizer, model_config, config, history[-1])
+    reported_best_loss = best_loss if best_loss < float("inf") else fallback_best_loss
     _write_json(
         output_dir / "train_history.json",
         {
             "steps": history,
             "final_loss": final_loss,
-            "best_loss": best_loss,
+            "best_loss": reported_best_loss,
             "model_config": asdict(model_config),
             "training_config": asdict(config),
         },
@@ -217,7 +222,7 @@ def run_progress_warmup_training(
         checkpoint_path=checkpoint_path,
         best_checkpoint_path=best_checkpoint_path,
         final_loss=final_loss,
-        best_loss=best_loss,
+        best_loss=reported_best_loss,
         steps=config.max_steps,
     )
 

@@ -6,11 +6,11 @@ This directory contains reusable, checked-in configuration only. Runtime outputs
 
 ```text
 bridge_himem/
-  base.yaml                         Shared defaults for Bridge-HiMem experiments
+  base.yaml                         Shared defaults for current direct bridge-attn experiments
   experiments/
     baseline.yaml                   Fused-token baseline
-    crosskv_clean.yaml              Cross-attention bridge baseline
-    mixed_latent_clean.yaml         Mixed-latent bridge baseline
+    crosskv_clean.yaml              Legacy cross-attention bridge baseline
+    mixed_latent_clean.yaml         Legacy mixed-latent bridge baseline
     mixed_latent_skill.yaml         Mixed-latent plus learnable skill tokens
     coarse_planner_crosskv.yaml     Legacy H32 planner bridge config
 ```
@@ -18,9 +18,10 @@ bridge_himem/
 Rules:
 
 - Experiment files use `extends` and should only override the fields that define the ablation.
-- Shared dimensions, raw VLM layers, bridge settings, and legacy planner defaults live in `bridge_himem/base.yaml`.
-- Current H32 planner integration keeps `coarse_planner.num_plan_steps: 1` and `coarse_planner.planning_horizon: 32`.
-- Current H32 planner integration keeps `coarse_planner.input_memory: false`.
+- Shared dimensions, VLM raw layers `[3, 6, 9, 12]`, direct bridge-attn defaults, and planner defaults live in `bridge_himem/base.yaml`.
+- Current direct bridge uses 32 noisy action tokens from the flow-matching horizon, not learned intermediate bridge tokens.
+- Progress planner output remains one base token and is expanded to 8 action-condition plan slots inside the direct action head.
+- Legacy H32 coarse-planner integration keeps `coarse_planner.num_plan_steps: 1`, `coarse_planner.planning_horizon: 32`, and `coarse_planner.input_memory: false`.
 - Validate before training with `python scripts/validate_bridge_himem_configs.py`.
 
 Standalone coarse-planner cache, AE, and planner configs live under `coarse_planner/configs/`, not in this directory.
