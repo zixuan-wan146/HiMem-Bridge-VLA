@@ -9,17 +9,16 @@ bridge_himem/
   base.yaml                         Shared defaults for Bridge-HiMem experiments
   experiments/
     baseline.yaml                   Fused-token baseline
-    crosskv_clean.yaml              BridgeAttention baseline
-    mixed_latent_clean.yaml         Memory enters action-head context
+    crosskv_clean.yaml              Cross-attention bridge baseline
+    mixed_latent_clean.yaml         Mixed-latent bridge baseline
     mixed_latent_skill.yaml         Mixed-latent plus learnable skill tokens
-    coarse_planner_crosskv.yaml     Active H32 planner + BridgeAttention integration config
+    coarse_planner_crosskv.yaml     Legacy H32 planner bridge config
 ```
 
 Rules:
 
 - Experiment files use `extends` and should only override the fields that define the ablation.
-- Shared dimensions, raw VLM layers, bridge settings, and action horizon defaults live in `bridge_himem/base.yaml`.
-- Current H32 planner integration keeps `action_head.horizon: 32`.
+- Shared dimensions, raw VLM layers, bridge settings, and legacy planner defaults live in `bridge_himem/base.yaml`.
 - Current H32 planner integration keeps `coarse_planner.num_plan_steps: 1` and `coarse_planner.planning_horizon: 32`.
 - Current H32 planner integration keeps `coarse_planner.input_memory: false`.
 - Validate before training with `python scripts/validate_bridge_himem_configs.py`.

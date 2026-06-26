@@ -72,6 +72,17 @@ class NormalizationStats:
         action_max = action_max_full[:action_dim].to(action.device, dtype=action.dtype)
         return minmax_denormalize(action, action_min, action_max)
 
+    def normalize_action(self, action: torch.Tensor, robot_key: str | None = None) -> torch.Tensor:
+        prepared = self._prepare_robot(self._resolve_robot_key(robot_key))
+        action_dim = action.shape[-1]
+        action_min_full = prepared["action_min"]
+        action_max_full = prepared["action_max"]
+        if action_dim > action_min_full.shape[0]:
+            raise ValueError(f"Action dimension {action_dim} exceeds normalizer dimension {action_min_full.shape[0]}")
+        action_min = action_min_full[:action_dim].to(action.device, dtype=action.dtype)
+        action_max = action_max_full[:action_dim].to(action.device, dtype=action.dtype)
+        return minmax_normalize(action, action_min, action_max)
+
     def _prepare_robot(self, robot_key: str) -> dict[str, torch.Tensor]:
         if robot_key in self._prepared:
             return self._prepared[robot_key]

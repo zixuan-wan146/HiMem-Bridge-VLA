@@ -60,11 +60,11 @@ H32 intent AE: best epoch 99, val_loss 0.0137875769
 H32 planner:   best epoch 52, raw MSE 0.0869378231, val loss 0.2716650516, cosine 0.9047680597
 ```
 
-## Integration Rule
+## Reuse In Current Design
 
-The next stage is not more same-family standalone fine-tuning by default. The useful next experiment is BridgeAttention / ActionHead joint training with exactly one H32 plan token:
+The trained H32 intent autoencoder can be reused as the frozen label encoder for progress-state planner warmup:
 
 ```text
-P_t = f_plan(H_t, s_t)       # [B, 1, D]
-ActionHead(H_t, s_t, P_t)    # predicts a 32-step action chunk
+z_k = IntentEncoder(normalized_A_k) # [B, 128], frozen target
+P_k = Planner(M_k, h_k, s_k)        # [B, 1, D]
 ```

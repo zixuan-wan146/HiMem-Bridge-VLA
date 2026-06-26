@@ -1,19 +1,22 @@
 # Bridge-HiMem Design
 
-This document describes the active BridgeAttention integration surface. The current planner route is H32 single-token intent planning. Older H64 suffix queues and transition-trigger refresh logic are not part of this design.
+This document describes the active progress-state planner warmup surface after the memory/planner redesign. The checked-in code still contains the legacy H32 `CoarsePlanner` path; the new progress-state planner is the target design and should be implemented under new config names.
 
-## Model Path
+Older H64 suffix queues, transition-trigger refresh logic, and Dual-FIFO long visual-memory logic are not part of this design.
+
+Current design work is scoped to progress-state planner warmup.
+
+## Target Model Path
 
 ```text
 RGB views + prompt
-  -> InternVL3 hidden states
-  -> optional CoarsePlanner(H_t, s_t) -> one H32 plan token
-  -> BridgeAdapter / BridgeAttention
-  -> FlowMatchingActionHead
-  -> 32-step action chunk
+  -> InternVL3 final hidden states F_t
+  -> AttnPool(F_t) -> h_t
+  -> ShortVisualMemory -> S_t
+  -> ProgressEvidenceEncoder(h_t, s_t, u_t) -> x_t
+  -> ProgressStateUpdater(M_{t-1}, x_t) -> M_t
+  -> ProgressPlanner(M_t, h_t, s_t) -> P_t
 ```
-
-The baseline path remains a control: `InternVL3 fused tokens -> FlowMatchingActionHead`.
 
 ## Config Entry
 
@@ -32,58 +35,84 @@ Validate configs before training:
 python scripts/validate_bridge_himem_configs.py
 ```
 
-## Fused Tokens
+## VL Embeddings
 
-`fused_tokens` are the final InternVL3 hidden sequence produced from images and prompt. They are not planner tokens and not memory tokens.
+Use the final InternVL3 hidden sequence as the first implementation choice:
 
 ```text
-fused_only             baseline control
-bridge_clean           action head sees only bridge tokens
-bridge_residual        concat(fused_tokens, bridge_tokens)
-bridge_gated_residual  concat(tanh(gate) * fused_tokens, bridge_tokens)
+F_t = final InternVL3 fused hidden states
 ```
 
-The clean planner integration should start from `bridge_clean` so the effect of the plan token is not mixed with a fused-token residual comparison.
+The final layer is the most task- and prompt-aligned representation available in the current stack. Keep the token sequence for evidence pooling, but the planner receives the pooled summary `h_t` rather than cross-attending over the full `F_t` sequence.
 
-## H32 Planner Token
+If later diagnostics show that the final layer loses low-level object detail, add a small layer-mixing projection as a second-stage refinement. Do not add that complexity before the final-layer route has a measured failure case.
 
-When `coarse_planner.enabled` is true, `HiMemBridgeVLA` calls the planner during context augmentation:
+## Short Visual Memory
+
+Short memory is independent visual-token context:
+
+```text
+H = 32
+R = 16
+S_t = ShortVisualMemory(V_{t-R/2}, V_{t-R})
+```
+
+Each recent visual observation is compressed with a BottleneckSE-style visual compressor, not a learnable-query compression head. This keeps the short-memory path close to MemoryVLA's perceptual compression and reduces the risk that free queries collapse into fixed templates under weak downstream supervision.
+
+It is responsible for local continuity: recent pose, contact, occlusion, and motion evidence. It should not maintain task progress.
+
+## Long Memory And Planner
+
+Long memory is the planner's task-progress state:
+
+```text
+M_t = [C_t, G_t]
+```
+
+Where:
+
+```text
+C_t: completed-events state token
+G_t: current-stage state token
+```
+
+The planner updates this state recurrently:
+
+```text
+x_t = ProgressEvidenceEncoder(h_t, s_t, u_t)
+M_t = ProgressStateUpdater(M_{t-1}, x_t)
+P_t = ProgressPlanner(M_t, h_t, s_t)
+```
+
+The long memory is not a FIFO visual bank and does not grow with time.
+
+## Legacy H32 Planner Token
+
+The old H32 path:
 
 ```text
 P_t = CoarsePlanner(fused_tokens, state)
 ```
 
-The planner output shape is `[B, 1, D]`. BridgeAttention receives it as plan context. There is no cache, suffix offset, or transition-trigger refresh signal.
+is now a baseline / auxiliary action-intent route. Its trained artifacts can be used for comparisons or as optional intent targets, but the action-latent supervision no longer defines the main planner semantics.
 
-Important defaults:
+Legacy coarse-planner defaults:
 
 ```yaml
-action_head:
-  horizon: 32
 coarse_planner:
   num_plan_steps: 1
   planning_horizon: 32
   input_memory: false
-  placement: bridge_crosskv
 ```
 
-## Memory Status
-
-The active memory work is Dual-FIFO visual memory. The current step is standalone memory-side inference construction, not BridgeAttention consumption.
-
-```text
-BridgeAttention memory integration: not active in this step
-coarse_planner.input_memory: false
-```
-
-See `docs/dual_fifo_visual_memory_design_zh.md` and `docs/dual_fifo_visual_memory_qa_zh.md`.
-
-## Active Experiment Files
+## Legacy Experiment Files
 
 ```text
 baseline.yaml                  fused-token control
-crosskv_clean.yaml             BridgeAttention baseline with memory config available but not wired into BridgeAttention
-mixed_latent_clean.yaml        mixed-latent bridge baseline with memory config available but not wired into BridgeAttention
-mixed_latent_skill.yaml        skill-token ablation, not active planner route
-coarse_planner_crosskv.yaml    current H32 planner + bridge integration config
+crosskv_clean.yaml             cross-attention bridge baseline
+mixed_latent_clean.yaml        mixed-latent bridge baseline
+mixed_latent_skill.yaml        skill-token ablation
+coarse_planner_crosskv.yaml    legacy H32 action-latent planner config
 ```
+
+New progress-state planner experiments should be added under new names rather than changing the meaning of `coarse_planner_crosskv.yaml`.

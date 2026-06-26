@@ -1,46 +1,96 @@
 # HiMem-Bridge-VLA Current Plan
 
-This checkout is the active project for BridgeAttention + H32 single-token coarse planner work. Older transition-trigger and H64 suffix-planner designs have been retired from the active roadmap.
-
-## Active Goal
-
-Promote the H32 standalone planner into BridgeAttention / ActionHead training without reintroducing cached suffix queues or transition-trigger refresh logic.
+This checkout is the active project for HiMem VLA progress-state planner work. The active method is:
 
 ```text
-H_t, s_t -> CoarsePlanner -> one plan token P_t -> BridgeAttention -> FlowMatchingActionHead -> 32-step action chunk
+short memory = independent recent visual-token memory
+long memory  = recurrent task-progress state inside the planner
 ```
 
-## Current State
+Older transition-trigger, H64 suffix-planner, and Dual-FIFO long visual-memory designs are retired from the active roadmap.
 
-- H32 feature cache is built on the remote data disk.
-- H32 action-only intent AE is trained.
-- H32 single-token planner is trained to the current best checkpoint.
-- Old H64 planner configs/checkpoints and transition-trigger active code paths have been removed.
-- Memory work is now a separate Dual-FIFO visual-memory track. The active step is memory-side inference construction, not BridgeAttention integration.
+## Current Contract
+
+```text
+H = 32
+R = 16
+S_k = ShortVisualMemory(V_{t_k-R/2}, V_{t_k-R})
+x_k = ProgressEvidenceEncoder(h_k, s_k, u_k)
+M_k = ProgressStateUpdater(M_{k-1}, x_k)
+P_k = Planner(M_k, h_k, s_k)
+```
+
+Current warm-up runs use:
+
+```text
+M_k = [C_k, G_k]: [B, 2, 896]
+P_k: [B, 1, 896]
+intent target z_k: [B, 128]
+```
+
+The planner-token count is intentionally kept at one for the completed warm-up weights. Changing it should be a separate model revision after discussion.
+
+## Completed Training Work
+
+```text
+LIBERO W=4 progress warm-up cache built
+LIBERO W=4 progress-state warm-up trained
+RMBench 14-dim H32 intent AE trained
+RMBench W=4 and W=8 progress warm-up caches built
+RMBench W=4 and W=8 progress-state warm-up weights trained
+RMBench W=8 stopped after step_000700.pt
+training summaries generated from logs
+```
+
+## Best Current Artifacts
+
+```text
+RMBench intent AE:
+  /root/autodl-tmp/runs/progress_warmup/rmbench_h32_intent_ae_v1/best.pt
+  best step: 950
+  val_loss: 0.015030
+
+LIBERO W=4 progress warm-up:
+  /root/autodl-tmp/runs/progress_warmup/libero_progress_state_planner_h32_r16_w4_bs12800_epval_v1/best.pt
+  best step: 310
+  val_loss: 0.017872
+
+RMBench W=4 progress warm-up:
+  /root/autodl-tmp/runs/progress_warmup/rmbench_progress_state_planner_h32_r16_w4_bs12800_epval_v1/best.pt
+  best step: 590
+  val_loss: 0.001225
+
+RMBench W=8 progress warm-up:
+  /root/autodl-tmp/runs/progress_warmup/rmbench_progress_state_planner_h32_r16_w8_bs6656_epval_v1/best.pt
+  best step: 660
+  val_loss: 0.001016
+```
+
+RMBench W=8 is the best current warm-up run on the main validation objective.
 
 ## Active Entry Points
 
 ```text
-docs/current_project_state.md   detailed state, artifacts, metrics, next work
-docs/engineering_reproducibility.md reproducibility and engineering gates
-docs/benchmark_plan.md          LIBERO / LIBERO-Plus / RMBench status and next work
-docs/coarse_planner_design.md   H32 planner target and training contract
-docs/bridge_himem_design.md     BridgeAttention integration contract
-docs/project_structure.md       code/config/docs/output boundaries
-coarse_planner/README.md        standalone cache, AE, and planner commands
+docs/progress_state_planner_design_zh.md      current long-memory and planner design
+docs/current_project_state.md                 detailed state, artifacts, metrics, next work
+docs/engineering_reproducibility.md           reproducibility and warm-up commands
+docs/bridge_himem_design.md                   Progress-state planner surface
+docs/project_structure.md                     code/config/docs/output boundaries
+coarse_planner/README.md                      legacy H32 baseline commands
 ```
 
-## Next Engineering Work
+## Next Work
 
-1. Keep the current H32 best planner checkpoint as the standalone planner baseline.
-2. Update BridgeAttention / ActionHead training data to consume one H32 plan token.
-3. Train the joint BridgeAttention / ActionHead path with the planner token enabled.
-4. Evaluate against fused-only and bridge-clean baselines.
-5. Keep BridgeAttention memory integration separate until the memory-side inference path is tested.
+1. Decide whether the planner remains one intent token or splits into multiple intent tokens.
+2. Inspect W=4 vs W=8 per-suite behavior before changing the planner structure.
+3. Integrate short visual-token memory on the policy side after the planner-token decision.
+4. Keep LIBERO and RMBench data code separated unless a shared abstraction becomes clearly useful.
 
 ## Guardrails
 
-- Do not restart transition-trigger work for this H32 path.
-- Do not reintroduce PlanTokenQueue, consumed-step suffix state, or cached plan refresh policy.
-- Do not wire memory into BridgeAttention before the memory-side inference path is tested.
+- Do not restart transition-trigger work for this path.
+- Do not reintroduce `PlanTokenQueue`, consumed-step suffix state, or cached plan refresh policy.
+- Do not model long memory as a growing visual-token bank.
+- Do not use future actions as long-memory input; future actions may only be targets.
+- Do not skip planner warm-up.
 - Keep large datasets, caches, checkpoints, and run outputs off the system disk.

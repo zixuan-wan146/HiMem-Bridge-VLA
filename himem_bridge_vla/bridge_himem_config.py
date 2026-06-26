@@ -50,7 +50,7 @@ class ContextConfig:
 @dataclass(frozen=True)
 class ShortMemoryConfig:
     capacity: int = 2
-    offsets: tuple[int, ...] = (32, 16)
+    offsets: tuple[int, ...] = (8, 16)
 
 
 @dataclass(frozen=True)

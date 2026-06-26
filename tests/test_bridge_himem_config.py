@@ -22,7 +22,7 @@ class BridgeHiMemConfigTests(unittest.TestCase):
         self.assertTrue(legacy["use_memory"])
         self.assertEqual(legacy["bridge_variant"], "crosskv")
         self.assertEqual(legacy["memory_kind"], "dual_fifo_visual")
-        self.assertEqual(legacy["memory_short_offsets"], [32, 16])
+        self.assertEqual(legacy["memory_short_offsets"], [8, 16])
         self.assertEqual(legacy["memory_entry_tokens"], 1)
         self.assertEqual(legacy["bridge_raw_layers"], [3, 7, 11, 14])
         self.assertFalse(legacy["allow_image_token_truncation"])

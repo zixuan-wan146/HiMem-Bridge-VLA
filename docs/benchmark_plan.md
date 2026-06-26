@@ -1,8 +1,10 @@
 # Benchmark 调研与推进计划
 
-当前准备关注三个 benchmark：LIBERO、LIBERO-Plus、RMBench。本文记录官方信息、本机数据状态、我们已有工程入口，以及后续要补的非训练工程工作。
+状态说明：本文保留 LIBERO / LIBERO-Plus / RMBench 的本机数据状态、工程入口和 eval planning 信息。文中 2026-06-23 的 memory replay / token cache 内容只代表 short visual-memory 数据路径和历史 smoke 工程；long memory 的当前主设计已经改为 planner-coupled task-progress state，见 `docs/progress_state_planner_design_zh.md`。
 
-当前明确不推进三件事：正式 Bridge/action-head 训练接入、真实 checkpoint + HiMem server 的 RMBench 端到端 eval smoke、LIBERO-Plus robustness eval wrapper。
+---
+
+当前准备关注三个 benchmark：LIBERO、LIBERO-Plus、RMBench。本文记录官方信息、本机数据状态、我们已有工程入口，以及 progress-state planner warmup 需要的数据准备工作。
 
 ## 1. LIBERO
 
@@ -49,13 +51,12 @@ scripts/report_libero_runs.py
 - replay dataset：`himem_bridge_vla/dataset/memory_replay_dataset.py` 提供 PyTorch-compatible dataset 和 collate，输出当前图像、短期历史图像、state、future actions 和 mask。
 - visual token cache：`scripts/build_memory_replay_token_cache.py` 可以把 replay dataset 中的图像预先编码成按 view 分组的 visual tokens，写成 shard + manifest。真实训练默认使用 InternVL3 visual tower；测试和 smoke 可使用 `image_stats` encoder。
 - token cache dataset：`himem_bridge_vla/dataset/memory_token_cache.py` 提供 `MemoryTokenCacheDataset` 和 `collate_memory_token_cache_samples`，可以从 shard 回读 visual tokens、state、future actions、`short_steps`、`short_mask`，并为每个样本构造 short `MemoryReadResult`。
-- memory context：`himem_bridge_vla/training/memory_context.py` 可以把 token-cache batch 中的 `short_memory` 压缩成 batched `memory_context` 和 `memory_context_mask`，供 Bridge-Attention 后续接入。
-- 已有小型动作回归 adapter 只作为历史 smoke 工具保留；当前不运行、不扩展，也不把它作为正式训练接口。
+- memory context：`himem_bridge_vla/training/memory_context.py` 可以把 token-cache batch 中的 `short_memory` 压缩成 batched `memory_context` 和 `memory_context_mask`，作为历史 smoke 数据接口。
 
 缺口：
 
 - 现有本机数据是常用 40-task VLA eval 子集，不是完整 LIBERO-100/130 task 全集。
-- memory replay 和 token cache 已经有可执行入口；当前不推进最终训练 loss 接入。
+- memory replay 和 token cache 已经有可执行入口；progress-state planner warmup 将复用其中的图像、state、future action chunk 和 mask 数据协议。
 - low-level 图像是否每个执行 step 都用于训练，由 replay index 的 `stride`、`short_offsets` 和 token cache 生成命令共同决定。
 
 ## 2. LIBERO-Plus
@@ -179,8 +180,7 @@ endpose/right_endpose      [T, 7]
 - 已实现安装脚本：`scripts/install_rmbench_policy_adapter.py`。它会把 adapter 复制到官方 RMBench 仓库的 `policy/HiMemBridgeVLA/` 下，供 `script/eval_policy.py` import。
 - 已实现 RMBench eval run wrapper：`scripts/run_rmbench_eval.sh`。它会安装 adapter、写 run manifest、写 eval plan，然后逐任务调用官方 `script/eval_policy.py`。
 - 已实现 RMBench run manifest：`scripts/write_rmbench_run_manifest.py`，记录任务列表、server URI、action/state protocol、policy 名称和 git/environment metadata。
-- 真实 checkpoint + websocket server 的 RMBench 端到端 eval smoke 暂不推进。
-- 已有 token cache batch 到 `memory_context` / `memory_context_mask` 的共享构造入口；正式 Bridge/action-head 训练 loop 暂不推进。
+- 已有 token cache batch 到 `memory_context` / `memory_context_mask` 的共享构造入口；该入口只作为历史 smoke 数据接口保留。
 
 ## 4. 统一推进任务
 
@@ -267,13 +267,4 @@ HIMEM_SERVER_URI=ws://127.0.0.1:9000 \
 bash scripts/run_rmbench_eval.sh
 ```
 
-其中 `HIMEM_RMBENCH_PLAN_ONLY=1` 只执行安装 adapter、写 manifest、写 plan，不启动仿真。当前不要去掉这个变量，不跑真实 checkpoint + server 的 RMBench 端到端 eval。
-
-暂不推进：
-
-```text
-formal Bridge/action-head training entry
-token cache / memory context training integration
-real-checkpoint RMBench end-to-end eval smoke
-LIBERO-Plus robustness eval wrapper
-```
+其中 `HIMEM_RMBENCH_PLAN_ONLY=1` 表示 plan-only 检查模式：安装 adapter、写 manifest、写 eval plan。

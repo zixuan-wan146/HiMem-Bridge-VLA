@@ -33,7 +33,7 @@ memory:
   views: [base, wrist]
   short:
     capacity: 2
-    offsets: [32, 16]
+    offsets: [8, 16]
   long:
     capacity: 4
   compression:
@@ -67,9 +67,3 @@ coarse_planner:
   input_memory: false
   placement: bridge_crosskv
   gripper_indices: [-1]
-
-action_head:
-  kind: flowmatching
-  use_existing_checkpoint_config: false
-  horizon: 32
-  per_action_dim:

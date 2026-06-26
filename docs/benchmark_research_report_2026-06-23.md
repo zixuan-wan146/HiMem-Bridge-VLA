@@ -2,12 +2,14 @@
 
 日期：2026-06-23
 
+状态说明：本文是 2026-06-23 的 benchmark 资产调研记录，不是当前 long-memory 设计入口。当前 long memory / planner 设计以 `docs/progress_state_planner_design_zh.md` 为准。
+
 本文是本轮 benchmark 调研的独立报告，和 `docs/benchmark_plan.md` 分工不同：
 
 - 本文回答：这些 benchmark 是什么、本机资源是什么状态、我们怎么用、有哪些任务、后续缺什么。
 - `docs/benchmark_plan.md` 回答：工程推进顺序和可执行命令。
 
-当前边界：不新增训练接口，不跑真实 checkpoint + server 的 RMBench 端到端 eval，不实现 LIBERO-Plus robustness wrapper。
+本文只记录 benchmark 资产、数据入口和工程状态；当前 long-memory / planner 设计以 `docs/progress_state_planner_design_zh.md` 为准。
 
 ## 1. 总览
 
@@ -88,7 +90,7 @@ memory 设置：
 
 ### 2.4 后续缺口
 
-当前不推进训练接口，因此缺口只记录，不实现：
+当时的范围边界是只记录训练接口缺口：
 
 - 若要覆盖完整官方 benchmark，需要补 LIBERO-90 / LIBERO-100 数据。
 - 若恢复训练，需要确认 replay index 的 `stride`、`short_offsets`、action horizon 是否和训练频率一致。
@@ -194,7 +196,7 @@ related_candidates           none found
 3. 确认其 perturbation config 是否能复用 LIBERO 环境，还是需要单独 wrapper。
 4. 确认任务列表、相机设置、action/state 协议和现有 LIBERO client 的兼容性。
 
-当前不做 LIBERO-Plus robustness wrapper。
+LIBERO-Plus robustness wrapper 保留为资源确认后的后续入口。
 
 ## 4. RMBench
 
@@ -306,11 +308,11 @@ memory 设置：
 当前合理推进顺序：
 
 1. 保持 LIBERO 和 RMBench 的 inventory / replay index / token cache / mask / manifest 可复现。
-2. 保持 `check_repo.sh` 默认不跑训练 smoke，避免误触当前不做的训练接口。
+2. 保持 `check_repo.sh` 默认不跑训练 smoke，避免误触非本轮入口。
 3. RMBench 只跑 plan-only 检查，不跑真实 checkpoint + server eval。
 4. LIBERO-Plus 在 exact root 缺失前，不写 wrapper、不纳入可执行 pipeline。
 
-当前不建议做：
+当时排除的工作：
 
 - 不把 LIBERO-Plus 和 LIBERO-PRO / LIBERO+ / LIBERO-Para 混用。
 - 不用 RMBench 的 14 维 action 直接假设成 LIBERO action 协议。
