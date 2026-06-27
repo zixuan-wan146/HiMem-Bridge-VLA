@@ -62,15 +62,13 @@ def obs_to_json_dict(
     resize_size=448,
     reset_memory=False,
 ):
-    img = np.ascontiguousarray(obs["agentview_image"][::-1, ::-1])
-    wrist_img = np.ascontiguousarray(obs["robot0_eye_in_hand_image"][::-1, ::-1])
-    dummy_proc = np.zeros((resize_size, resize_size, 3), dtype=np.uint8)
+    img = np.ascontiguousarray(obs["agentview_image"])
+    wrist_img = np.ascontiguousarray(obs["robot0_eye_in_hand_image"])
 
     data = {
         "image": [
             encode_image_array(img),
             encode_image_array(wrist_img),
-            encode_image_array(dummy_proc)
         ],
         "state": np.concatenate((
             obs["robot0_eef_pos"],
@@ -78,7 +76,7 @@ def obs_to_json_dict(
             obs["robot0_gripper_qpos"],
         )).tolist(),
         "prompt": prompt,
-        "image_mask": [1, 1, 0],
+        "image_mask": [1, 1],
         "action_mask": [1] * 7 + [0] * 17,
         "reset_memory": bool(reset_memory),
     }

@@ -50,6 +50,17 @@ def test_validate_inference_request_accepts_optional_runtime_fields():
     assert request["return_debug"] is True
 
 
+def test_validate_inference_request_accepts_fewer_than_max_images():
+    payload = valid_request()
+    payload["image"] = [tiny_rgb_image(1), tiny_rgb_image(2)]
+    payload["image_mask"] = [1, 1]
+
+    request = validate_inference_request(payload, target_state_dim=6)
+
+    assert len(request["image"]) == 2
+    assert request["image_mask"] == [1, 1, 0]
+
+
 def test_validate_inference_request_accepts_zero_padded_action_mask_for_smaller_model_dim():
     payload = valid_request()
     payload["state"] = [0.1, 0.2, 0.3]
@@ -69,11 +80,19 @@ def test_validate_inference_request_rejects_missing_required_fields():
         validate_inference_request(payload)
 
 
-def test_validate_inference_request_rejects_wrong_image_count():
+def test_validate_inference_request_rejects_too_many_images():
     payload = valid_request()
-    payload["image"] = [tiny_rgb_image()]
+    payload["image"] = [tiny_rgb_image()] * 4
 
-    with pytest.raises(ValueError, match="exactly 3 images"):
+    with pytest.raises(ValueError, match="at most 3 images"):
+        validate_inference_request(payload)
+
+
+def test_validate_inference_request_rejects_empty_images():
+    payload = valid_request()
+    payload["image"] = []
+
+    with pytest.raises(ValueError, match="at least one image"):
         validate_inference_request(payload)
 
 

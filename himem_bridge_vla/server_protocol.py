@@ -139,8 +139,10 @@ def _coerce_binary_mask(mask: Any, field_name: str) -> np.ndarray:
 def _validate_images(images: Any, *, max_views: int) -> list[Any]:
     if not isinstance(images, Sequence) or isinstance(images, (str, bytes, bytearray)):
         raise ValueError("image must be a sequence of image arrays")
-    if len(images) != max_views:
-        raise ValueError(f"Must provide exactly {max_views} images, got {len(images)}")
+    if not images:
+        raise ValueError("Must provide at least one image")
+    if len(images) > max_views:
+        raise ValueError(f"Must provide at most {max_views} images, got {len(images)}")
     for index, image in enumerate(images):
         _validate_image_array(image, index)
     return list(images)

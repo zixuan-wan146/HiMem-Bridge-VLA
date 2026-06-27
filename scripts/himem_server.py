@@ -288,9 +288,9 @@ def infer_from_json_dict(data: dict, model, normalizer, runtime_state: RuntimePo
             return_hidden_states=model.use_bridge,
         )
         if hasattr(embedding_output, "fused_tokens"):
-            fused_tokens = embedding_output.fused_tokens
             hidden_states = embedding_output.hidden_states
             visual_tokens = getattr(embedding_output, "visual_tokens", None)
+            fused_tokens = visual_tokens if visual_tokens is not None else embedding_output.fused_tokens
         else:
             fused_tokens = embedding_output
             hidden_states = None
