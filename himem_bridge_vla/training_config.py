@@ -31,9 +31,9 @@ TRAINING_DEFAULTS: dict[str, Any] = {
     "warmup_steps": 300,
     "grad_clip_norm": 1.0,
     "weight_decay": 1e-5,
+    "min_lr_ratio": 0.0,
     "lr_groups": {},
     "enable_bridge_aux_loss": False,
-    "enable_coarse_planner_loss": False,
     "log_interval": 10,
     "ckpt_interval": 10,
     "best_ckpt_interval": 1000,
@@ -44,7 +44,6 @@ TRAINING_DEFAULTS: dict[str, Any] = {
     "resume_pretrain": False,
     "finetune_vlm": False,
     "finetune_action_head": False,
-    "finetune_coarse_planner": True,
     "progress_planner_enabled": False,
     "progress_planner_checkpoint": None,
     "finetune_progress_planner": False,
@@ -58,6 +57,11 @@ TRAINING_DEFAULTS: dict[str, Any] = {
     "visual_gate_lambda": 0.5,
     "plan_gate_lambda": 0.25,
     "short_memory_time_bins": 2,
+    "memory_token_cache_sequence_training": False,
+    "burnin_replan_steps": 8,
+    "loss_replan_steps": 8,
+    "allow_short_burnin": True,
+    "trajectory_window_stride": 1,
     "max_vlm_tokens": None,
     "num_inference_timesteps": 15,
     "inference_tau_schedule": "midpoint",
@@ -73,6 +77,7 @@ INPUT_PATH_KEYS = (
     "dataset_config_path",
     "dataset_config_base_dir",
     "bridge_himem_config",
+    "progress_planner_checkpoint",
     "resume_path",
 )
 
@@ -145,12 +150,15 @@ POSITIVE_INT_KEYS = (
     "action_head_ffn_dim",
     "num_plan_slots",
     "short_memory_time_bins",
+    "loss_replan_steps",
+    "trajectory_window_stride",
 )
 
 NON_NEGATIVE_INT_KEYS = (
     "num_workers",
     "warmup_steps",
     "best_ckpt_min_step",
+    "burnin_replan_steps",
 )
 
 POSITIVE_FLOAT_KEYS = (
@@ -165,6 +173,7 @@ NON_NEGATIVE_FLOAT_KEYS = (
     "progress_loss_weight",
     "visual_gate_lambda",
     "plan_gate_lambda",
+    "min_lr_ratio",
 )
 
 
@@ -195,6 +204,21 @@ def validate_training_config(
         _validation_path(bridge_himem_config, repo_root, label="--bridge_himem_config")
     ):
         raise FileNotFoundError(f"Bridge-HiMem config file not found: {bridge_himem_config}")
+
+    progress_planner_checkpoint = config.get("progress_planner_checkpoint")
+    if progress_planner_checkpoint and not path_exists(
+        _validation_path(progress_planner_checkpoint, repo_root, label="--progress_planner_checkpoint")
+    ):
+        raise FileNotFoundError(f"Progress planner checkpoint not found: {progress_planner_checkpoint}")
+    if (
+        bool(config.get("progress_planner_enabled", False))
+        and not progress_planner_checkpoint
+        and not bool(config.get("finetune_progress_planner", False))
+    ):
+        raise ValueError(
+            "--progress_planner_enabled=true with no --progress_planner_checkpoint and "
+            "--finetune_progress_planner=false would use a random frozen progress planner"
+        )
 
     for key in POSITIVE_INT_KEYS:
         value = _as_int(config.get(key, TRAINING_DEFAULTS.get(key, 0)), f"--{key}")
@@ -238,6 +262,10 @@ def validate_training_config(
     if dropout > 1:
         raise ValueError(f"--dropout must be <= 1, got {dropout}")
 
+    min_lr_ratio = _as_float(config.get("min_lr_ratio", 0.0), "--min_lr_ratio")
+    if min_lr_ratio > 1:
+        raise ValueError(f"--min_lr_ratio must be <= 1, got {min_lr_ratio}")
+
     inference_tau_schedule = str(config.get("inference_tau_schedule", "midpoint")).lower()
     if inference_tau_schedule != "midpoint":
         raise ValueError("--inference_tau_schedule must be midpoint")
@@ -265,8 +293,14 @@ def validate_training_config(
 
     if bool(config.get("finetune_vlm", False)) and not bool(config.get("load_vlm", True)):
         raise ValueError("--finetune_vlm=true requires --load_vlm=true")
-    if str(config.get("dataset_type", "simulation")) != "memory_token_cache" and not bool(config.get("load_vlm", True)):
+    dataset_type = str(config.get("dataset_type", "simulation"))
+    if dataset_type != "memory_token_cache" and not bool(config.get("load_vlm", True)):
         raise ValueError("--load_vlm=false is only supported with dataset_type=memory_token_cache")
+    if bool(config.get("memory_token_cache_sequence_training", False)):
+        if dataset_type != "memory_token_cache":
+            raise ValueError("--memory_token_cache_sequence_training=true requires dataset_type=memory_token_cache")
+        if not bool(config.get("progress_planner_enabled", False)) and not config.get("progress_planner_checkpoint"):
+            raise ValueError("--memory_token_cache_sequence_training=true requires a progress planner")
 
 
 def _as_int(value: Any, label: str) -> int:

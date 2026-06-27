@@ -1,6 +1,6 @@
 # Bridge-HiMem Design
 
-This document summarizes the active model path after the memory/planner redesign. The checked-in code still contains the legacy H32 `CoarsePlanner` route as a baseline, but the active architecture is:
+This document summarizes the active model path after the memory/planner redesign. The active architecture is:
 
 ```text
 progress-state planner
@@ -118,25 +118,6 @@ action-condition branch:
 
 Each action block contains action self-attn, visual cross-attn, action-condition cross-attn, and FFN. See `docs/direct_bridge_attention_design_zh.md`.
 
-## Legacy H32 Planner Token
-
-The old H32 path:
-
-```text
-P_t = CoarsePlanner(fused_tokens, state)
-```
-
-is now a baseline / auxiliary action-intent route. Its trained artifacts can be used for comparisons or as optional intent targets, but the action-latent supervision no longer defines the main planner semantics.
-
-Legacy coarse-planner defaults:
-
-```yaml
-coarse_planner:
-  num_plan_steps: 1
-  planning_horizon: 32
-  input_memory: false
-```
-
 ## Legacy Experiment Files
 
 ```text
@@ -144,7 +125,4 @@ baseline.yaml                  fused-token control
 crosskv_clean.yaml             cross-attention bridge baseline
 mixed_latent_clean.yaml        mixed-latent bridge baseline
 mixed_latent_skill.yaml        skill-token ablation
-coarse_planner_crosskv.yaml    legacy H32 action-latent planner config
 ```
-
-New progress-state planner experiments should be added under new names rather than changing the meaning of `coarse_planner_crosskv.yaml`.

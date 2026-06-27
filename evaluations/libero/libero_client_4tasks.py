@@ -121,9 +121,10 @@ async def run(SERVER_URL: str, max_steps: int = None, num_episodes: int = None, 
     benchmark_dict = benchmark.get_benchmark_dict()
     task_suite = benchmark_dict[task_suite_name]()
     num_tasks_in_suite = task_suite.n_tasks
-    task_ids = range(num_tasks_in_suite)
+    task_start = min(args.task_offset, num_tasks_in_suite)
+    task_ids = range(task_start, num_tasks_in_suite)
     if args.task_limit > 0:
-        task_ids = range(min(args.task_limit, num_tasks_in_suite))
+        task_ids = range(task_start, min(task_start + args.task_limit, num_tasks_in_suite))
 
     log.info(f"Number of tasks: {num_tasks_in_suite}")
 
@@ -133,7 +134,7 @@ async def run(SERVER_URL: str, max_steps: int = None, num_episodes: int = None, 
     total_success_decision_steps = 0
     suite_results = []
 
-    async with websockets.connect(SERVER_URL) as ws:
+    async with websockets.connect(SERVER_URL, ping_interval=None, ping_timeout=None) as ws:
         log.info(f"===========================Start task suite {task_suite_name}========================")
 
         for task_id in task_ids:

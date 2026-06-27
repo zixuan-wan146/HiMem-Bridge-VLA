@@ -29,7 +29,6 @@ $AUTODL_TMP/libero/datasets/libero_10       10 demo files, about 13G
 当前已经具备：
 
 ```text
-coarse_planner/build_from_libero.py
 scripts/build_libero_memory_replay_index.py
 evaluations/libero/libero_client_4tasks.py
 configs/libero_profiles/smoke.env
@@ -43,7 +42,6 @@ scripts/report_libero_runs.py
 
 用途：
 
-- 数据准备：可以继续用 `coarse_planner/build_from_libero.py` 生成 H32 feature cache。
 - eval：可以用现有 websocket server + LIBERO client 跑 smoke/full eval。
 - memory 后续验证：LIBERO 是双视角单臂，memory compression 默认 `n_m=1`。
 - memory replay：可以用 `scripts/build_libero_memory_replay_index.py` 生成轻量 JSONL index，固定当前帧、短期历史帧、action chunk 范围和 mask。

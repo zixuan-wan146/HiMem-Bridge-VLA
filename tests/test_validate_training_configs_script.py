@@ -16,7 +16,7 @@ def test_validate_training_configs_script_loads_default_profiles():
     )
 
     assert result.returncode == 0, result.stderr
-    assert "validated 0 training config(s)" in result.stdout
+    assert "configs/stage1/libero_10_direct_progress_w4.yaml" in result.stdout
 
 
 def test_validate_training_configs_script_rejects_absolute_profile_paths(tmp_path):

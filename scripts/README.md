@@ -15,7 +15,8 @@ Scripts are grouped by responsibility. Prefer these entry points over hand-writt
 
 ## Training And Model Assets
 
-- `train.py`: main training entry point.
+- `train_stage1.py`: active Stage1 trajectory-window token-cache training launcher. The implementation lives under `himem_bridge_vla/training/stage1/`; the script only starts the CLI.
+- `train.py`: legacy mixed training entry for historical paths. It does not own active Stage1 trajectory-window training.
 - `himem_server.py`: websocket inference server.
 - `download_libero_checkpoint.sh`: download the LIBERO checkpoint to the data disk.
 - `start_himem_server.sh`: start the HiMem-Bridge-VLA websocket server with checkpoint preflight.
@@ -41,7 +42,7 @@ There are two different cache families:
 
 Do not pass progress warm-up caches into the direct bridge token-cache smoke; the script validates the manifest format and will reject them.
 
-For direct bridge-attn training from cached replay tokens, use `dataset_type=memory_token_cache`. The training loader uses `collate_direct_bridge_token_cache_samples`, which emits `fused_tokens`, optional `vlm_hidden_states`, `memory_context`, `memory_context_mask`, `short_memory_time_ids`, state, future actions, and per-dimension action masks. This path bypasses online VLM encoding and is meant for reproducible action-head / bridge smoke runs over replay-token caches.
+For active Stage1 direct bridge-attn training from cached replay tokens, use `scripts/train_stage1.py` or `python -m himem_bridge_vla.training.stage1.cli`. The Stage1 loader uses trajectory windows from `MemoryTokenCacheTrajectoryDataset`, not random frame-level batches, so the frozen progress planner state is advanced chronologically through burn-in and loss windows.
 
 Example:
 

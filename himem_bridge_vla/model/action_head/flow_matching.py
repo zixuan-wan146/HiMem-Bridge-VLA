@@ -193,6 +193,7 @@ class FlowmatchingActionHead(nn.Module):
         dropout: float = 0.0,
         num_inference_timesteps: int = 15,
         num_categories: int = 1,
+        short_memory_time_bins: int = 2,
     ):
         super().__init__()
 
@@ -207,6 +208,7 @@ class FlowmatchingActionHead(nn.Module):
             dropout = getattr(config, "dropout", dropout)
             num_inference_timesteps = getattr(config, "num_inference_timesteps", num_inference_timesteps)
             num_categories = getattr(config, "num_categories", num_categories)
+            short_memory_time_bins = getattr(config, "short_memory_time_bins", short_memory_time_bins)
             self.config = config
         else:
             self.config = SimpleNamespace(
@@ -222,6 +224,7 @@ class FlowmatchingActionHead(nn.Module):
                 inference_tau_schedule="midpoint",
                 avoid_endpoint_tau=True,
                 num_categories=num_categories,
+                short_memory_time_bins=short_memory_time_bins,
             )
 
         if action_dim != horizon * per_action_dim:
@@ -629,7 +632,15 @@ class FlowmatchingActionHead(nn.Module):
             raise ValueError(
                 f"short_memory_time_ids shape {tuple(time_ids.shape)} must equal {(batch_size, token_count)}"
             )
-        return time_ids.clamp(0, self.short_memory_time_embedding.num_embeddings - 1)
+        min_id = int(time_ids.min().item()) if time_ids.numel() else 0
+        max_id = int(time_ids.max().item()) if time_ids.numel() else 0
+        time_bins = int(self.short_memory_time_embedding.num_embeddings)
+        if min_id < 0 or max_id >= time_bins:
+            raise ValueError(
+                f"short_memory_time_ids must be in [0, {time_bins - 1}], got min={min_id}, max={max_id}. "
+                "Increase short_memory_time_bins or fix the short-memory packing config."
+            )
+        return time_ids
 
     def _time_embedding(self, t: torch.Tensor, *, device: torch.device, dtype: torch.dtype) -> torch.Tensor:
         time_index = (t * 1000).long().clamp(0, 999)

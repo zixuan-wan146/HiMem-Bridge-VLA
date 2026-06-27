@@ -85,6 +85,51 @@ def test_build_param_groups_applies_stage1_lr_and_no_decay_rules():
     assert by_name["short_memory_projector.decay"]["lr"] == 1e-4
 
 
+def test_build_param_groups_keeps_action_expert_separate_from_bridge_attention():
+    torch = pytest.importorskip("torch")
+    train_script = _load_train_script()
+
+    model = torch.nn.Module()
+    model.action_head = torch.nn.Module()
+    model.action_head.transformer_blocks = torch.nn.ModuleList([torch.nn.Module()])
+    model.action_head.transformer_blocks[0].self_attn = torch.nn.Linear(4, 4)
+    model.action_head.transformer_blocks[0].visual_attn = torch.nn.Linear(4, 4)
+    model.action_head.transformer_blocks[0].action_attn = torch.nn.Linear(4, 4)
+
+    groups = train_script.build_param_groups(
+        model,
+        wd=0.001,
+        base_lr=5e-5,
+        lr_groups={
+            "action_expert": 5e-5,
+            "bridge_attention": 1e-4,
+            "flow_matching_action_head": 5e-5,
+        },
+    )
+    named = {group.get("name", ""): group for group in groups}
+
+    assert named["action_expert.decay"]["lr"] == 5e-5
+    assert named["bridge_attention.decay"]["lr"] == 1e-4
+
+
+def test_lr_lambda_honors_min_lr_ratio():
+    train_script = _load_train_script()
+    schedule = train_script.get_lr_lambda(warmup_steps=0, total_steps=10, min_lr_ratio=0.1)
+
+    assert schedule(10) == pytest.approx(0.1)
+
+
+def test_train_rejects_stage1_trajectory_window_route(monkeypatch):
+    train_script = _load_train_script()
+    monkeypatch.setattr(train_script, "_ensure_training_runtime", lambda: None)
+    monkeypatch.setattr(train_script, "resolve_experiment_config", lambda config: dict(config))
+    monkeypatch.setattr(train_script, "resolve_training_config_paths", lambda config, _repo_root: dict(config))
+    monkeypatch.setattr(train_script, "validate_training_config", lambda config, **_kwargs: None)
+
+    with pytest.raises(ValueError, match="scripts/train_stage1.py"):
+        train_script.train({"memory_token_cache_sequence_training": True})
+
+
 def test_unwrap_training_model_uses_accelerator_when_available(monkeypatch):
     train_script = _load_train_script()
     wrapper = object()
@@ -193,59 +238,6 @@ def test_custom_collate_includes_direct_bridge_optional_tensors():
     assert tuple(batch["plan_token_mask"].shape) == (2, 1)
 
 
-def test_compute_coarse_planner_loss_uses_cached_model_output():
-    torch = pytest.importorskip("torch")
-    train_script = _load_train_script()
-
-    model = _ModelWithPlannerOutput(predicted_latents=torch.zeros(2, 3, 5))
-    batch = {
-        "action_segments": torch.ones(2, 3, 4, 2),
-        "action_segment_mask": torch.ones(2, 3, dtype=torch.bool),
-    }
-
-    loss, metrics = train_script.compute_coarse_planner_loss(
-        model,
-        batch,
-        {
-            "enable_coarse_planner_loss": True,
-            "coarse_planner_loss_weight": 0.5,
-            "coarse_planner_gripper_indices": [],
-        },
-        segment_autoencoder=_FakeSegmentAutoencoder(latent_dim=5),
-    )
-
-    assert loss is not None
-    assert loss.item() > 0
-    assert "coarse_planner_loss" in metrics
-    assert "coarse_planner_loss_weighted" in metrics
-
-
-def test_build_action_segment_dataset_config_returns_none_when_disabled():
-    train_script = _load_train_script()
-
-    assert train_script.build_action_segment_dataset_config({"coarse_planner_enabled": False}) is None
-
-
-def test_build_action_segment_dataset_config_maps_planner_fields():
-    train_script = _load_train_script()
-
-    config = train_script.build_action_segment_dataset_config(
-        {
-            "coarse_planner_enabled": True,
-            "coarse_planner_num_plan_steps": 4,
-            "coarse_planner_planning_horizon": 16,
-            "coarse_planner_action_dim": 7,
-        }
-    )
-
-    assert config == {
-        "enabled": True,
-        "num_plan_steps": 4,
-        "planning_horizon": 16,
-        "action_dim": 7,
-    }
-
-
 class _FrozenParam:
     requires_grad = False
 
@@ -270,27 +262,6 @@ class _ModelWithBridgeOutput:
             boundary_logits=boundary_logits,
             progress_logits=progress_logits,
         )
-
-
-class _PlannerOutput:
-    def __init__(self, *, predicted_latents):
-        self.predicted_latents = predicted_latents
-
-
-class _ModelWithPlannerOutput:
-    def __init__(self, *, predicted_latents):
-        self.last_coarse_planner_output = _PlannerOutput(predicted_latents=predicted_latents)
-
-
-class _FakeSegmentAutoencoder:
-    def __init__(self, *, latent_dim):
-        self.latent_dim = latent_dim
-
-    def encode(self, action_segments):
-        return action_segments.new_ones((*action_segments.shape[:2], self.latent_dim))
-
-    def decode(self, predicted_latents):
-        return predicted_latents.new_zeros((*predicted_latents.shape[:2], 4, 2))
 
 
 def _load_train_script():

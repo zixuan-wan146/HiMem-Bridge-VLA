@@ -34,7 +34,6 @@ from himem_bridge_vla.reproducibility import (
 )
 from himem_bridge_vla.training_loss import (
     boundary_bce_loss,
-    coarse_planner_intent_loss,
     masked_flow_matching_mse,
     progress_smooth_l1_loss,
 )
@@ -231,68 +230,6 @@ def compute_bridge_auxiliary_loss(model, batch: dict, config: dict) -> tuple[Any
     return aux_loss, metrics
 
 
-def load_action_segment_autoencoder(checkpoint_path: str | None, *, device: Any):
-    if not checkpoint_path:
-        return None
-    from himem_bridge_vla.model.planner import ActionSegmentAutoencoder, ActionSegmentAutoencoderConfig
-
-    checkpoint_file = Path(str(checkpoint_path)).expanduser()
-    if not checkpoint_file.is_absolute():
-        checkpoint_file = project_path(checkpoint_file, REPO_ROOT)
-    checkpoint = torch.load(checkpoint_file, map_location=device, weights_only=False)
-    raw_config = checkpoint.get("segment_autoencoder_config") or checkpoint.get("autoencoder_config")
-    if raw_config is None:
-        raise KeyError(f"segment autoencoder checkpoint lacks config: {checkpoint_path}")
-    state_dict = checkpoint.get("segment_autoencoder_state_dict") or checkpoint.get("model")
-    if state_dict is None:
-        raise KeyError(f"segment autoencoder checkpoint lacks weights: {checkpoint_path}")
-    autoencoder = ActionSegmentAutoencoder(ActionSegmentAutoencoderConfig(**raw_config)).to(device)
-    autoencoder.load_state_dict(state_dict)
-    autoencoder.eval()
-    for parameter in autoencoder.parameters():
-        parameter.requires_grad = False
-    return autoencoder
-
-
-def compute_coarse_planner_loss(model, batch: dict, config: dict, segment_autoencoder=None) -> tuple[Any, dict[str, float]]:
-    if not bool(config.get("enable_coarse_planner_loss", False)):
-        return None, {}
-    planner_output = getattr(unwrap_training_model(model), "last_coarse_planner_output", None)
-    if planner_output is None or segment_autoencoder is None:
-        return None, {}
-    if "action_segments" not in batch or "action_segment_mask" not in batch:
-        return None, {}
-
-    action_segments = batch["action_segments"].to(
-        device=planner_output.predicted_latents.device,
-        dtype=planner_output.predicted_latents.dtype,
-    )
-    segment_mask = batch["action_segment_mask"].to(device=planner_output.predicted_latents.device)
-    torch_module = torch
-    if torch_module is None:
-        import torch as torch_module
-    with torch_module.no_grad():
-        target_latents = segment_autoencoder.encode(action_segments)
-    decoded_segments = segment_autoencoder.decode(planner_output.predicted_latents)
-    planner_loss = coarse_planner_intent_loss(
-        planner_output.predicted_latents,
-        target_latents,
-        decoded_segments,
-        action_segments,
-        segment_mask,
-        latent_loss_weight=float(config.get("coarse_planner_latent_loss_weight", 1.0)),
-        chunk_loss_weight=float(config.get("coarse_planner_chunk_loss_weight", 1.0)),
-        gripper_indices=config.get("coarse_planner_gripper_indices", [-1]),
-        gripper_loss_weight=float(config.get("coarse_planner_gripper_loss_weight", 2.0)),
-    )
-    loss_weight = float(config.get("coarse_planner_loss_weight", 0.2))
-    weighted_loss = loss_weight * planner_loss
-    return weighted_loss, {
-        "coarse_planner_loss": float(planner_loss.detach().cpu().item()),
-        "coarse_planner_loss_weighted": float(weighted_loss.detach().cpu().item()),
-    }
-
-
 def custom_collate_fn(batch):
     prompts = [item["prompt"] for item in batch]
     images = [item["images"] for item in batch]
@@ -341,13 +278,18 @@ def custom_collate_fn(batch):
             batch_dict[optional_key] = [item[optional_key] for item in batch]
     return batch_dict
 
-def get_lr_lambda(warmup_steps, total_steps, resume_step=0):
+def get_lr_lambda(warmup_steps, total_steps, resume_step=0, min_lr_ratio=0.0):
+    min_lr_ratio = float(min_lr_ratio)
+    if min_lr_ratio < 0.0 or min_lr_ratio > 1.0:
+        raise ValueError(f"min_lr_ratio must be in [0, 1], got {min_lr_ratio}")
+
     def lr_lambda(current_step):
         current_step += resume_step  
         if current_step < warmup_steps:
             return current_step / max(1, warmup_steps)
         progress = (current_step - warmup_steps) / max(1, total_steps - warmup_steps)
-        return max(0.0, 0.5 * (1.0 + math.cos(math.pi * progress)))
+        cosine = max(0.0, 0.5 * (1.0 + math.cos(math.pi * progress)))
+        return min_lr_ratio + (1.0 - min_lr_ratio) * cosine
     return lr_lambda
     
 def setup_logging(log_dir: str) -> str:
@@ -447,7 +389,6 @@ def prepare_dataset(config: dict) -> torch.utils.data.Dataset:
             binarize_gripper=binarize_gripper,
             cache_dir=config.get("cache_dir"),
             use_augmentation=use_augmentation,
-            action_segment_config=build_action_segment_dataset_config(config),
         )
     elif dataset_type == "memory_token_cache":
         from himem_bridge_vla.dataset import MemoryTokenCacheDataset
@@ -470,17 +411,6 @@ def prepare_dataset(config: dict) -> torch.utils.data.Dataset:
             display_project_path(dataset_config_base_dir, REPO_ROOT),
         )
     return dataset
-
-
-def build_action_segment_dataset_config(config: dict) -> dict | None:
-    if not bool(config.get("coarse_planner_enabled", False)):
-        return None
-    return {
-        "enabled": True,
-        "num_plan_steps": int(config.get("coarse_planner_num_plan_steps", 1)),
-        "planning_horizon": int(config.get("coarse_planner_planning_horizon", 32)),
-        "action_dim": int(config.get("coarse_planner_action_dim", config.get("per_action_dim", 7))),
-    }
 
 
 def prepare_dataloader(dataset, config: dict) -> DataLoader:
@@ -693,16 +623,16 @@ LR_GROUP_PATTERNS = (
     ("noisy_action_encoder", ("action_head.action_encoder",)),
     ("action_pos_embedding", ("action_head.action_encoder.pos_encoding",)),
     ("temporal_pos_embedding", ("temporal_pos_embedding", "time_embedding", "short_memory_time_embedding")),
-    ("bridge_attention", ("transformer_blocks", "self_attn", "visual_cross_attn", "action_cross_attn")),
+    ("bridge_attention", ("visual_attn", "action_attn", "visual_cross_attn", "action_cross_attn")),
     ("bridge_adapter", ("bridge_adapter",)),
     ("short_memory_encoder", ("short_memory",)),
     ("short_memory_projector", ("short_memory_adapter",)),
     ("plan_projector", ("plan_adapter", "plan_slot_embeddings", "plan_src_emb")),
     ("progress_condition_projector", ("progress_condition_projector",)),
     ("source_mlp", ("state_encoder", "vlm_src_emb", "mem_src_emb", "state_src_emb")),
+    ("action_expert", ("action_head.transformer_blocks",)),
     ("action_head", ("action_head.action_decoder", "norm_out")),
     ("flow_matching_action_head", ("action_head",)),
-    ("action_expert", ("action_head.transformer_blocks",)),
 )
 
 
@@ -756,11 +686,18 @@ def build_param_groups(model, wd, base_lr: float | None = None, lr_groups: dict[
         param_groups.append(group)
     return param_groups
 
+
 def train(config):
     _ensure_training_runtime()
 
     config = resolve_experiment_config(config)
+    config = resolve_training_config_paths(config, REPO_ROOT)
     validate_training_config(config, repo_root=REPO_ROOT)
+    if bool(config.get("memory_token_cache_sequence_training", False)):
+        raise ValueError(
+            "Trajectory-window Stage1 training has moved out of scripts/train.py. "
+            "Use scripts/train_stage1.py or python -m himem_bridge_vla.training.stage1.cli."
+        )
 
     seed = int(config.get("seed", 42))
     deterministic = bool(config.get("deterministic", False))
@@ -875,7 +812,15 @@ def train(config):
         step = 0
         logging.info("Resuming pretraining from scratch, resetting step to 0")
 
-    scheduler = LambdaLR(optimizer, get_lr_lambda(warmup_steps, max_steps, resume_step=step))
+    scheduler = LambdaLR(
+        optimizer,
+        get_lr_lambda(
+            warmup_steps,
+            max_steps,
+            resume_step=step,
+            min_lr_ratio=float(config.get("min_lr_ratio", 0.0)),
+        ),
+    )
 
 
     if accelerator.is_main_process:
@@ -886,20 +831,19 @@ def train(config):
             modules_to_inspect["language_model"] = unwrapped_model.embedder.model.language_model
         if unwrapped_model.bridge_adapter is not None:
             modules_to_inspect["bridge_adapter"] = unwrapped_model.bridge_adapter
-        if unwrapped_model.coarse_planner is not None:
-            modules_to_inspect["coarse_planner"] = unwrapped_model.coarse_planner
         inspect_named_submodules(modules_to_inspect)
-
-    segment_autoencoder = load_action_segment_autoencoder(
-        config.get("coarse_planner_segment_autoencoder_checkpoint"),
-        device=accelerator.device,
-    )
 
     # === Training Loop ===
     while step < max_steps:
         for batch in tqdm(dataloader, desc="Training", disable=not accelerator.is_main_process):
             if step >= max_steps:
                 break
+            if "trajectory_steps" in batch:
+                raise ValueError(
+                    "scripts/train.py does not own trajectory-window Stage1 batches. "
+                    "Use scripts/train_stage1.py or python -m himem_bridge_vla.training.stage1.cli."
+                )
+
             states = batch["states"].to(device=accelerator.device, dtype=torch.bfloat16)
             actions_gt = batch["actions"].to(device=accelerator.device, dtype=torch.bfloat16)
             action_mask = batch["action_mask"].to(device=accelerator.device)
@@ -994,15 +938,6 @@ def train(config):
                 loss = loss + bridge_aux_loss
                 extra_metrics.update(bridge_metrics)
                 extra_metrics["bridge_aux_loss"] = float(bridge_aux_loss.detach().cpu().item())
-            coarse_planner_loss, coarse_planner_metrics = compute_coarse_planner_loss(
-                model,
-                batch,
-                config,
-                segment_autoencoder=segment_autoencoder,
-            )
-            if coarse_planner_loss is not None:
-                loss = loss + coarse_planner_loss
-                extra_metrics.update(coarse_planner_metrics)
             
             # === NaN/Inf check ===
             if not check_numerical_stability(
@@ -1158,7 +1093,6 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--boundary_loss_weight", type=float, default=argparse.SUPPRESS)
     parser.add_argument("--progress_loss_weight", type=float, default=argparse.SUPPRESS)
     parser.add_argument("--enable_bridge_aux_loss", action=argparse.BooleanOptionalAction, default=argparse.SUPPRESS)
-    parser.add_argument("--enable_coarse_planner_loss", action=argparse.BooleanOptionalAction, default=argparse.SUPPRESS)
 
     # Logging & checkpointing
     parser.add_argument("--log_interval", type=int, default=argparse.SUPPRESS)
@@ -1175,7 +1109,6 @@ def build_arg_parser() -> argparse.ArgumentParser:
     # Finetuning
     parser.add_argument("--finetune_vlm", action=argparse.BooleanOptionalAction, default=argparse.SUPPRESS)
     parser.add_argument("--finetune_action_head", action=argparse.BooleanOptionalAction, default=argparse.SUPPRESS)
-    parser.add_argument("--finetune_coarse_planner", action=argparse.BooleanOptionalAction, default=argparse.SUPPRESS)
     parser.add_argument("--finetune_progress_planner", action=argparse.BooleanOptionalAction, default=argparse.SUPPRESS)
 
     # Misc
@@ -1185,6 +1118,11 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--per_action_dim", type=int, default=argparse.SUPPRESS)
     parser.add_argument("--state_dim", type=int, default=argparse.SUPPRESS)
     parser.add_argument("--horizon", type=int, default=argparse.SUPPRESS)
+    parser.add_argument("--memory_token_cache_sequence_training", action=argparse.BooleanOptionalAction, default=argparse.SUPPRESS)
+    parser.add_argument("--burnin_replan_steps", type=int, default=argparse.SUPPRESS)
+    parser.add_argument("--loss_replan_steps", type=int, default=argparse.SUPPRESS)
+    parser.add_argument("--allow_short_burnin", action=argparse.BooleanOptionalAction, default=argparse.SUPPRESS)
+    parser.add_argument("--trajectory_window_stride", type=int, default=argparse.SUPPRESS)
     parser.add_argument("--num_layers", type=int, default=argparse.SUPPRESS)
     parser.add_argument("--action_head_ffn_dim", type=int, default=argparse.SUPPRESS)
     parser.add_argument("--num_plan_slots", type=int, default=argparse.SUPPRESS)
@@ -1197,6 +1135,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--avoid_endpoint_tau", action=argparse.BooleanOptionalAction, default=argparse.SUPPRESS)
     parser.add_argument("--num_workers", type=int, default=argparse.SUPPRESS)
     parser.add_argument("--dropout", type=float, default=argparse.SUPPRESS)
+    parser.add_argument("--min_lr_ratio", type=float, default=argparse.SUPPRESS)
     return parser
 
 
@@ -1214,11 +1153,17 @@ def build_training_config(args: argparse.Namespace) -> dict:
     else:
         file_config = {}
 
+    explicit_config_keys = {
+        key for key, value in file_config.items() if value is not None
+    } | {
+        key for key, value in cli_overrides.items() if value is not None
+    }
     config = merge_training_config(
         default_training_config(REPO_ROOT),
         file_config=file_config,
         cli_overrides=cli_overrides,
     )
+    config["_explicit_config_keys"] = sorted(explicit_config_keys)
     config["repo_root"] = "."
     return resolve_training_config_paths(config, REPO_ROOT)
 

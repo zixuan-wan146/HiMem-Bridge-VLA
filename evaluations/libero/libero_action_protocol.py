@@ -50,7 +50,10 @@ def to_libero_action(action: Sequence[float], control_dim: int = LIBERO_CONTROL_
     if len(action) < control_dim:
         raise ValueError(f"Action dimension {len(action)} is smaller than LIBERO control dim {control_dim}")
     libero_action = [float(value) for value in action[:control_dim]]
-    libero_action[6] = -1.0 if libero_action[6] > 0.5 else 1.0
+    # Stage1 is trained on raw LIBERO HDF5 actions, where the environment
+    # gripper command is already encoded as -1/+1. Preserve that sign instead
+    # of applying the OpenVLA/RLDS gripper inversion rule.
+    libero_action[6] = 1.0 if libero_action[6] >= 0.0 else -1.0
     return libero_action
 
 

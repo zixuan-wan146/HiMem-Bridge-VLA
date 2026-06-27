@@ -7,6 +7,7 @@
 ```text
 himem_bridge_vla/bridge_himem_config.py    Bridge / memory / planner 配置 schema
 himem_bridge_vla/experiment_config.py      训练和模型共用配置解析
+himem_bridge_vla/training/stage1/          active LIBERO Stage1 trajectory-window token-cache training
 himem_bridge_vla/model/bridge/             legacy bridge modules
 himem_bridge_vla/model/himem/              short visual-token memory support
 himem_bridge_vla/model/planner/            progress-state planner + legacy H32 baseline
@@ -14,7 +15,8 @@ himem_bridge_vla/model/action_head/flow_matching.py direct bridge-attn flow-matc
 himem_bridge_vla/model/himem_bridge_vla.py 主模型入口；direct bridge 模式直接连接 VLM hidden states、short memory、plan slots 和 state
 himem_bridge_vla/dataset/libero_progress_warmup.py   LIBERO progress warm-up cache / dataset
 himem_bridge_vla/dataset/rmbench_progress_warmup.py  RMBench progress warm-up cache / dataset
-scripts/train.py                           训练入口
+scripts/train_stage1.py                    active Stage1 训练入口
+scripts/train.py                           legacy mixed training entry, not the active Stage1 route
 scripts/himem_server.py                    websocket 推理服务
 evaluations/libero/                        LIBERO eval client 和结果统计
 evaluations/rmbench/                       RMBench policy adapter 和 eval plan helpers
@@ -117,7 +119,24 @@ action_mask
 
 其中 short memory 每个历史时刻固定 pack 到 `memory_entry_tokens=16`，两个历史时刻合计 32 tokens。
 
-注意：最终 direct bridge 训练 cache 必须使用 `--encoder internvl3 --include-vlm-hidden-states --hidden-state-layers 3 6 9 12`。这会同时缓存 InternVL3 visual-tower tokens 和 selected language/VLM hidden-state token layers。`current_tokens_by_view` 供 short memory 与 IO 检查使用；`current_hidden_states` 会在 collate 后变成 `vlm_hidden_states`，并由 `scripts/train.py` 传给 direct bridge action head。只包含 `current_tokens_by_view` 的 cache 仅用于 smoke 或降级调试，不作为最终训练输入。
+注意：最终 direct bridge 训练 cache 必须使用 `--encoder internvl3 --include-vlm-hidden-states --hidden-state-layers 3 6 9 12`。这会同时缓存 InternVL3 visual-tower tokens 和 selected language/VLM hidden-state token layers。`current_tokens_by_view` 供 short memory 与 IO 检查使用；`current_hidden_states` 会在 collate 后变成 `vlm_hidden_states`，并由 `scripts/train_stage1.py` 传给 direct bridge action head。只包含 `current_tokens_by_view` 的 cache 仅用于 smoke 或降级调试，不作为最终训练输入。
+
+Stage1 action-side policy 训练必须走 trajectory-window cache 入口：
+
+```bash
+"$AUTODL_TMP/miniforge3/envs/Evo1/bin/python" -m accelerate.commands.launch \
+  --deepspeed_config_file configs/deepspeed/ds_config.json \
+  scripts/train_stage1.py \
+  --config configs/stage1/libero_10_direct_progress_w4.yaml
+```
+
+该入口会拒绝 frame-level random batch，因为 frozen W4 ProgressPlanner 内部维护递推 long memory：
+
+```text
+M_k = f(M_{k-1}, x_k)
+```
+
+每个 batch item 是一个 episode 内连续 replan window：先 burn-in 更新 `M_k` 但不计 loss，再在 loss window 上计算 masked flow-matching velocity loss。
 
 注意 cache 类型不要混用：
 
@@ -274,7 +293,6 @@ LIBERO H32/R16 cache：
 "$AUTODL_TMP/miniforge3/envs/Evo1/bin/python" scripts/build_libero_progress_vl_embedding_cache.py \
   --index run_outputs/libero_memory_replay.jsonl \
   --output-root "$AUTODL_TMP/token_caches/libero_progress_vl_embedding_h32_r16_w4" \
-  --segment-ae-checkpoint "$AUTODL_TMP/runs/coarse_planner/libero_h32_intent_ae_v1/best.pt" \
   --horizon 32 \
   --replan-stride 16 \
   --burnin-replan-steps 8 \

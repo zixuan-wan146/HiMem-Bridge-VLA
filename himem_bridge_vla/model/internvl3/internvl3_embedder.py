@@ -19,6 +19,7 @@ class InternVL3EmbeddingOutput:
     fused_tokens: torch.Tensor
     hidden_states: list[torch.Tensor]
     attention_mask: torch.Tensor
+    visual_tokens: torch.Tensor | None = None
 
 # === Image Transformations ===
 def build_transform(input_size):
@@ -275,9 +276,29 @@ class InternVL3Embedder(nn.Module):
                 fused_tokens=fused_tokens,
                 hidden_states=select_hidden_states(all_hidden_states, selected_layers),
                 attention_mask=attention_mask,
+                visual_tokens=_flatten_active_visual_tokens(vit_embeds, image_mask, num_tiles_list),
             )
 
         return fused_tokens
+
+
+def _flatten_active_visual_tokens(
+    vit_embeds: torch.Tensor,
+    image_mask: torch.Tensor,
+    num_tiles_list: Sequence[int],
+) -> torch.Tensor:
+    active = image_mask.to(device=vit_embeds.device).bool().reshape(-1)
+    parts = []
+    cursor = 0
+    for image_index, tile_count in enumerate(num_tiles_list):
+        tile_count = int(tile_count)
+        image_tokens = vit_embeds[cursor : cursor + tile_count].reshape(-1, vit_embeds.shape[-1])
+        if image_index < int(active.numel()) and bool(active[image_index].item()):
+            parts.append(image_tokens)
+        cursor += tile_count
+    if not parts:
+        return vit_embeds.new_zeros(1, 0, vit_embeds.shape[-1])
+    return torch.cat(parts, dim=0).unsqueeze(0)
 
 
 def select_hidden_states(

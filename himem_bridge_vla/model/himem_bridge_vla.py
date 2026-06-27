@@ -1,4 +1,5 @@
 import logging
+from contextlib import nullcontext
 from pathlib import Path
 from types import SimpleNamespace
 from typing import List, Tuple, Union
@@ -12,14 +13,12 @@ try:
     from .action_head.flow_matching import FlowmatchingActionHead
     from .bridge import BridgeAdapter, BridgeAdapterConfig, BridgeAdapterOutput
     from .internvl3.internvl3_embedder import InternVL3Embedder, InternVL3EmbeddingOutput
-    from .planner import CoarsePlanner, CoarsePlannerConfig, CoarsePlannerOutput
     from .planner import ProgressPlannerOutput, ProgressState, ProgressStateConfig, ProgressStatePlanner
 except ImportError:
     from himem_bridge_vla.experiment_config import resolve_experiment_config
     from himem_bridge_vla.model.action_head.flow_matching import FlowmatchingActionHead
     from himem_bridge_vla.model.bridge import BridgeAdapter, BridgeAdapterConfig, BridgeAdapterOutput
     from himem_bridge_vla.model.internvl3.internvl3_embedder import InternVL3Embedder, InternVL3EmbeddingOutput
-    from himem_bridge_vla.model.planner import CoarsePlanner, CoarsePlannerConfig, CoarsePlannerOutput
     from himem_bridge_vla.model.planner import ProgressPlannerOutput, ProgressState, ProgressStateConfig, ProgressStatePlanner
 
 
@@ -93,13 +92,11 @@ class HiMemBridgeVLA(nn.Module):
         )
         self.memory_placement = str(config.get("memory_placement", "crosskv"))
         self.bridge_adapter = None
-        self.coarse_planner = None
         self.progress_state_planner = None
         self.runtime_progress_state: ProgressState | None = None
         self.skill_tokens = None
         self.fused_residual_gate = None
         self.last_bridge_output: BridgeAdapterOutput | None = None
-        self.last_coarse_planner_output: CoarsePlannerOutput | None = None
         self.last_progress_planner_output: ProgressPlannerOutput | None = None
 
         if self.use_bridge and not self.use_direct_bridge:
@@ -134,31 +131,18 @@ class HiMemBridgeVLA(nn.Module):
                 self.skill_tokens = nn.Parameter(torch.empty(skill_count, bridge_config.embed_dim))
                 nn.init.normal_(self.skill_tokens, mean=0.0, std=0.02)
 
-        if bool(config.get("coarse_planner_enabled", False)):
-            if bool(config.get("progress_planner_enabled", False)):
-                raise ValueError("coarse_planner_enabled and progress_planner_enabled are mutually exclusive")
-            if not self.use_bridge:
-                raise ValueError("coarse_planner_enabled requires use_bridge=true")
-            if bool(config.get("coarse_planner_input_memory", False)):
-                raise ValueError("Coarse Planner does not accept memory in the first version")
-            planner_config = CoarsePlannerConfig(
-                hidden_dim=config.get("coarse_planner_hidden_dim", config.get("bridge_hidden_dim", config.get("embed_dim", 896))),
-                state_dim=config.get("state_dim", 7),
-                latent_dim=config.get("coarse_planner_latent_dim", 128),
-                latent_head_hidden_dim=config.get("coarse_planner_latent_head_hidden_dim", 512),
-                num_plan_steps=config.get("coarse_planner_num_plan_steps", 1),
-                planning_horizon=config.get("coarse_planner_planning_horizon", 32),
-                num_layers=config.get("coarse_planner_num_layers", 4),
-                num_heads=config.get("coarse_planner_num_heads", 8),
-                dropout=config.get("coarse_planner_dropout", config.get("dropout", 0.05)),
-            )
-            self.coarse_planner = CoarsePlanner(planner_config).to(self._device)
-
         if bool(config.get("progress_planner_enabled", False)) or config.get("progress_planner_checkpoint"):
-            if self.coarse_planner is not None:
-                raise ValueError("progress_planner and coarse_planner are mutually exclusive")
             if not self.use_direct_bridge:
                 raise ValueError("progress planner integration requires bridge.variant=direct")
+            if (
+                bool(config.get("progress_planner_enabled", False))
+                and not config.get("progress_planner_checkpoint")
+                and not bool(config.get("finetune_progress_planner", False))
+            ):
+                raise ValueError(
+                    "progress_planner_enabled=true with no checkpoint and finetune_progress_planner=false "
+                    "would use a random frozen progress planner"
+                )
             self.progress_state_planner = self._build_progress_state_planner(config).to(self._device)
 
     def get_vl_embeddings(
@@ -220,16 +204,7 @@ class HiMemBridgeVLA(nn.Module):
     ) -> Union[torch.Tensor, Tuple[torch.Tensor, torch.Tensor]]:
         if self.use_direct_bridge:
             plan_tokens = None
-            if self.coarse_planner is not None:
-                if state is None:
-                    raise ValueError("state is required when Coarse Planner is enabled")
-                plan_tokens = self._get_or_update_plan_tokens(
-                    fused_tokens,
-                    state,
-                    planner_fused_tokens=planner_fused_tokens,
-                    planner_state=planner_state,
-                )
-            elif self.progress_state_planner is not None:
+            if self.progress_state_planner is not None:
                 plan_tokens = self._get_or_update_progress_plan_tokens(
                     fused_tokens,
                     state,
@@ -241,7 +216,6 @@ class HiMemBridgeVLA(nn.Module):
                     planner_state=planner_state,
                 )
             else:
-                self.last_coarse_planner_output = None
                 self.last_progress_planner_output = None
             self.last_bridge_output = None
             short_memory_time_ids = self._resolve_short_memory_time_ids(memory_context, short_memory_time_ids)
@@ -280,8 +254,6 @@ class HiMemBridgeVLA(nn.Module):
             hidden_states=hidden_states,
             memory_context=memory_context,
             memory_context_mask=memory_context_mask,
-            planner_fused_tokens=planner_fused_tokens,
-            planner_state=planner_state,
             plan_token_mask=plan_token_mask,
         )
         if actions_gt is None:
@@ -379,34 +351,19 @@ class HiMemBridgeVLA(nn.Module):
         hidden_states: list[torch.Tensor] | None,
         memory_context: torch.Tensor | None,
         memory_context_mask: torch.Tensor | None,
-        planner_fused_tokens: torch.Tensor | None = None,
-        planner_state: torch.Tensor | None = None,
         plan_token_mask: torch.Tensor | None = None,
     ) -> torch.Tensor:
         if self.bridge_adapter is None:
             self.last_bridge_output = None
-            self.last_coarse_planner_output = None
             return fused_tokens
 
-        plan_tokens = None
-        if self.coarse_planner is not None:
-            if state is None:
-                raise ValueError("state is required when Coarse Planner is enabled")
-            plan_tokens = self._get_or_update_plan_tokens(
-                fused_tokens,
-                state,
-                planner_fused_tokens=planner_fused_tokens,
-                planner_state=planner_state,
-            )
-        else:
-            self.last_coarse_planner_output = None
-            self.last_progress_planner_output = None
+        self.last_progress_planner_output = None
 
         bridge_output = self.bridge_adapter(
             fused_tokens,
             hidden_states=hidden_states,
             state=state,
-            plan_tokens=plan_tokens,
+            plan_tokens=None,
             plan_token_mask=plan_token_mask,
             memory_context=memory_context if self.memory_placement == "crosskv" else None,
             memory_context_mask=memory_context_mask if self.memory_placement == "crosskv" else None,
@@ -450,21 +407,6 @@ class HiMemBridgeVLA(nn.Module):
 
         return context_tokens
 
-    def _get_or_update_plan_tokens(
-        self,
-        fused_tokens: torch.Tensor,
-        state: torch.Tensor,
-        *,
-        planner_fused_tokens: torch.Tensor | None = None,
-        planner_state: torch.Tensor | None = None,
-    ) -> torch.Tensor:
-        if self.coarse_planner is None:
-            raise RuntimeError("coarse planner is not initialized")
-        planner_fused_tokens = fused_tokens if planner_fused_tokens is None else planner_fused_tokens
-        planner_state = state if planner_state is None else planner_state
-        self.last_coarse_planner_output = self.coarse_planner(planner_fused_tokens, planner_state)
-        return self.last_coarse_planner_output.plan_tokens
-
     def _get_or_update_progress_plan_tokens(
         self,
         fused_tokens: torch.Tensor,
@@ -492,15 +434,20 @@ class HiMemBridgeVLA(nn.Module):
         )
         batch_size = int(vl_summary.shape[0])
         previous_state = self._resolve_progress_state(progress_state, batch_size, vl_summary.device, vl_summary.dtype)
-        output = self.progress_state_planner.forward_step(
-            previous_state,
-            vl_summary,
-            planner_state,
-            executed_actions,
-            executed_action_mask,
+        planner_context = (
+            nullcontext()
+            if bool(self.config.get("finetune_progress_planner", False))
+            else torch.no_grad()
         )
+        with planner_context:
+            output = self.progress_state_planner.forward_step(
+                previous_state,
+                vl_summary,
+                planner_state,
+                executed_actions,
+                executed_action_mask,
+            )
         self.last_progress_planner_output = output
-        self.last_coarse_planner_output = None
         if not self.training:
             self.runtime_progress_state = ProgressState(
                 completed_events=output.progress_state.completed_events.detach(),
@@ -624,10 +571,9 @@ class HiMemBridgeVLA(nn.Module):
         else:
             logging.info("Finetuning Action Head...")
 
-        if self.coarse_planner is not None and not self.config.get("finetune_coarse_planner", True):
-            self._freeze_module(self.coarse_planner, "Coarse Planner")
         if self.progress_state_planner is not None and not self.config.get("finetune_progress_planner", False):
             self._freeze_module(self.progress_state_planner, "Progress-State Planner")
+            self.progress_state_planner.eval()
 
 
 def _ensure_rank3(tensor: torch.Tensor, name: str) -> torch.Tensor:

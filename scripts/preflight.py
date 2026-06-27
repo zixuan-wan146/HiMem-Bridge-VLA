@@ -36,7 +36,7 @@ REQUIRED_REPO_FILES = (
     "himem_bridge_vla/server_protocol.py",
     "himem_bridge_vla/model/himem_bridge_vla.py",
     "scripts/himem_server.py",
-    "scripts/train.py",
+    "scripts/train_stage1.py",
     "configs/datasets/simulation.yaml",
     "himem_bridge_vla/dataset/config_utils.py",
     "himem_bridge_vla/dataset/validation.py",

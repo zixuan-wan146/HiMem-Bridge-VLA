@@ -13,7 +13,6 @@ bridge_himem/
     crosskv_clean.yaml              Legacy cross-attention bridge baseline
     mixed_latent_clean.yaml         Legacy mixed-latent bridge baseline
     mixed_latent_skill.yaml         Mixed-latent plus learnable skill tokens
-    coarse_planner_crosskv.yaml     Legacy H32 planner bridge config
 ```
 
 Rules:
@@ -22,10 +21,7 @@ Rules:
 - Shared dimensions, VLM raw layers `[3, 6, 9, 12]`, direct bridge-attn defaults, and planner defaults live in `bridge_himem/base.yaml`.
 - Current direct bridge uses 32 noisy action tokens from the flow-matching horizon, not learned intermediate bridge tokens.
 - Progress planner output remains one base token and is expanded to 8 action-condition plan slots inside the direct action head.
-- Legacy H32 coarse-planner integration keeps `coarse_planner.num_plan_steps: 1`, `coarse_planner.planning_horizon: 32`, and `coarse_planner.input_memory: false`.
 - Validate before training with `python scripts/validate_bridge_himem_configs.py`.
-
-Standalone coarse-planner cache, AE, and planner configs live under `coarse_planner/configs/`, not in this directory.
 
 ## LIBERO Profiles
 
@@ -44,7 +40,7 @@ datasets/
   simulation.yaml  Generic LeRobot-style simulation training data
 ```
 
-Relative dataset paths in these YAML files are resolved from `--dataset_config_base_dir`, which defaults to the repository root in `scripts/train.py`.
+Relative dataset paths in these YAML files are resolved from `--dataset_config_base_dir`, which defaults to the repository root in the active training entrypoint.
 
 ## Training Profiles
 
@@ -52,13 +48,13 @@ Training profiles keep experiment hyperparameters out of shell commands. Use CLI
 
 Validate profiles before training with `python scripts/validate_training_configs.py`.
 
-Current checked-in template:
+Current active Stage 1 profile:
 
 ```text
-training_templates/libero_10_stage1_direct_progress_w4.yaml
+stage1/libero_10_direct_progress_w4.yaml
 ```
 
-This template expects a repo-local symlink `local_data -> /root/autodl-tmp` on the remote server. The resolved cache manifest is:
+This template expects a repo-local symlink `local_data -> $AUTODL_TMP` on the remote server. The resolved cache manifest is:
 
 ```text
 local_data/token_caches/libero_10_memory_replay_internvl3_hidden_l3_6_9_12_s16_dedup_parts4/manifest.json

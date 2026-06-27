@@ -16,6 +16,12 @@ def resolve_experiment_config(config: Mapping[str, Any]) -> dict[str, Any]:
         return dict(config)
 
     resolved = dict(config)
+    explicit_keys = {
+        str(key)
+        for key in resolved.get("_explicit_config_keys", ())
+        if key not in {"bridge_himem_config", "bridge_himem", "bridge_himem_config_path"}
+    }
+    explicit_values = {key: resolved[key] for key in explicit_keys if key in resolved and resolved[key] is not None}
     bridge_spec = resolved.get("bridge_himem_config")
     if bridge_spec is None:
         bridge_spec = resolved.get("bridge_himem")
@@ -30,6 +36,10 @@ def resolve_experiment_config(config: Mapping[str, Any]) -> dict[str, Any]:
             resolved["bridge_himem_config_path"] = bridge_config.experiment_name
         if resolved.get("seed") is None:
             resolved["seed"] = bridge_config.seed
+
+    # Bridge YAML defines the model family. Training profiles and CLI flags are
+    # still allowed to override fields such as the W4 planner checkpoint.
+    resolved.update(explicit_values)
 
     if resolved.get("seed") is None:
         resolved["seed"] = 42

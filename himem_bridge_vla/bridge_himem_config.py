@@ -8,9 +8,6 @@ from typing import Any, Mapping
 BRIDGE_VARIANTS = {"direct", "crosskv", "mixed_latent"}
 CONTEXT_MODES = {"fused_only", "bridge_clean", "bridge_residual", "bridge_gated_residual"}
 MEMORY_KINDS = {"fixed_recent_visual"}
-COARSE_PLANNER_TYPES = {"query_cross_attention"}
-COARSE_PLANNER_LOSSES = {"intent_latent"}
-COARSE_PLANNER_PLACEMENTS = {"direct_action_condition", "bridge_crosskv"}
 
 
 @dataclass(frozen=True)
@@ -78,30 +75,6 @@ class SkillConfig:
 
 
 @dataclass(frozen=True)
-class CoarsePlannerConfig:
-    enabled: bool = False
-    type: str = "query_cross_attention"
-    hidden_dim: int = 896
-    num_layers: int = 4
-    num_heads: int = 8
-    num_plan_steps: int = 1
-    planning_horizon: int = 32
-    latent_dim: int = 128
-    latent_head_hidden_dim: int = 512
-    segment_action_dim: int = 7
-    dropout: float = 0.05
-    loss: str = "intent_latent"
-    loss_weight: float = 0.2
-    latent_loss_weight: float = 1.0
-    chunk_loss_weight: float = 0.25
-    gripper_loss_weight: float = 2.0
-    segment_autoencoder_checkpoint: str | None = None
-    input_memory: bool = False
-    placement: str = "direct_action_condition"
-    gripper_indices: tuple[int, ...] = (-1,)
-
-
-@dataclass(frozen=True)
 class ProgressPlannerConfig:
     enabled: bool = False
     checkpoint: str | None = None
@@ -145,7 +118,6 @@ class BridgeHiMemConfig:
     context: ContextConfig = field(default_factory=ContextConfig)
     memory: MemoryConfig = field(default_factory=MemoryConfig)
     skill: SkillConfig = field(default_factory=SkillConfig)
-    coarse_planner: CoarsePlannerConfig = field(default_factory=CoarsePlannerConfig)
     progress_planner: ProgressPlannerConfig = field(default_factory=ProgressPlannerConfig)
     action_head: ActionHeadConfig = field(default_factory=ActionHeadConfig)
 
@@ -162,11 +134,6 @@ class BridgeHiMemConfig:
             context=_build_dataclass(ContextConfig, mapping.get("context", {}), "context"),
             memory=_build_memory_config(mapping.get("memory", {})),
             skill=_build_dataclass(SkillConfig, mapping.get("skill", {}), "skill"),
-            coarse_planner=_build_dataclass(
-                CoarsePlannerConfig,
-                mapping.get("coarse_planner", {}),
-                "coarse_planner",
-            ),
             progress_planner=_build_dataclass(
                 ProgressPlannerConfig,
                 mapping.get("progress_planner", {}),
@@ -229,44 +196,6 @@ class BridgeHiMemConfig:
         if self.context.mode == "fused_only" and self.memory.enabled and self.bridge.variant != "direct":
             raise ValueError("context.mode=fused_only cannot expose memory to the action head")
 
-        if self.coarse_planner.type not in COARSE_PLANNER_TYPES:
-            raise ValueError(f"coarse_planner.type must be one of {sorted(COARSE_PLANNER_TYPES)}")
-        if self.coarse_planner.loss not in COARSE_PLANNER_LOSSES:
-            raise ValueError(f"coarse_planner.loss must be one of {sorted(COARSE_PLANNER_LOSSES)}")
-        if self.coarse_planner.placement not in COARSE_PLANNER_PLACEMENTS:
-            raise ValueError(f"coarse_planner.placement must be one of {sorted(COARSE_PLANNER_PLACEMENTS)}")
-        _positive_int(self.coarse_planner.hidden_dim, "coarse_planner.hidden_dim")
-        _positive_int(self.coarse_planner.num_layers, "coarse_planner.num_layers")
-        _positive_int(self.coarse_planner.num_heads, "coarse_planner.num_heads")
-        _positive_int(self.coarse_planner.num_plan_steps, "coarse_planner.num_plan_steps")
-        _positive_int(self.coarse_planner.planning_horizon, "coarse_planner.planning_horizon")
-        _positive_int(self.coarse_planner.latent_dim, "coarse_planner.latent_dim")
-        _positive_int(self.coarse_planner.latent_head_hidden_dim, "coarse_planner.latent_head_hidden_dim")
-        _positive_int(self.coarse_planner.segment_action_dim, "coarse_planner.segment_action_dim")
-        _non_negative_float(self.coarse_planner.dropout, "coarse_planner.dropout")
-        _non_negative_float(self.coarse_planner.loss_weight, "coarse_planner.loss_weight")
-        _non_negative_float(self.coarse_planner.latent_loss_weight, "coarse_planner.latent_loss_weight")
-        _non_negative_float(self.coarse_planner.chunk_loss_weight, "coarse_planner.chunk_loss_weight")
-        _non_negative_float(self.coarse_planner.gripper_loss_weight, "coarse_planner.gripper_loss_weight")
-        _validate_action_indices(
-            self.coarse_planner.gripper_indices,
-            self.coarse_planner.segment_action_dim,
-            "coarse_planner.gripper_indices",
-        )
-        if self.coarse_planner.enabled:
-            if not self.bridge.enabled:
-                raise ValueError("coarse_planner.enabled=true requires bridge.enabled=true")
-            if self.coarse_planner.hidden_dim != self.vlm.hidden_dim:
-                raise ValueError("coarse_planner.hidden_dim must match vlm.hidden_dim")
-            if self.coarse_planner.hidden_dim % self.coarse_planner.num_heads != 0:
-                raise ValueError("coarse_planner.hidden_dim must be divisible by coarse_planner.num_heads")
-            if self.coarse_planner.num_layers < 3:
-                raise ValueError("coarse_planner.num_layers must be at least 3")
-            if self.coarse_planner.input_memory:
-                raise ValueError("coarse_planner.input_memory must remain false in the first version")
-            if self.coarse_planner.planning_horizon % self.coarse_planner.num_plan_steps != 0:
-                raise ValueError("coarse_planner.planning_horizon must be divisible by num_plan_steps")
-
         _positive_int(self.progress_planner.hidden_dim, "progress_planner.hidden_dim")
         _positive_int(self.progress_planner.state_dim, "progress_planner.state_dim")
         _positive_int(self.progress_planner.action_dim, "progress_planner.action_dim")
@@ -280,8 +209,6 @@ class BridgeHiMemConfig:
         _positive_int(self.progress_planner.num_heads, "progress_planner.num_heads")
         _non_negative_float(self.progress_planner.dropout, "progress_planner.dropout")
         if self.progress_planner.enabled:
-            if self.coarse_planner.enabled:
-                raise ValueError("progress_planner.enabled and coarse_planner.enabled are mutually exclusive")
             if not self.bridge.enabled or self.bridge.variant != "direct":
                 raise ValueError("progress_planner.enabled requires bridge.variant=direct")
             if self.progress_planner.hidden_dim != self.vlm.hidden_dim:
@@ -332,26 +259,6 @@ class BridgeHiMemConfig:
             "memory_max_age_steps": self.memory.compression.max_age_steps,
             "skill_tokens_enabled": self.skill.enabled,
             "skill_num_tokens": self.skill.num_tokens,
-            "coarse_planner_enabled": self.coarse_planner.enabled,
-            "coarse_planner_type": self.coarse_planner.type,
-            "coarse_planner_hidden_dim": self.coarse_planner.hidden_dim,
-            "coarse_planner_num_layers": self.coarse_planner.num_layers,
-            "coarse_planner_num_heads": self.coarse_planner.num_heads,
-            "coarse_planner_num_plan_steps": self.coarse_planner.num_plan_steps,
-            "coarse_planner_planning_horizon": self.coarse_planner.planning_horizon,
-            "coarse_planner_latent_dim": self.coarse_planner.latent_dim,
-            "coarse_planner_latent_head_hidden_dim": self.coarse_planner.latent_head_hidden_dim,
-            "coarse_planner_action_dim": self.coarse_planner.segment_action_dim,
-            "coarse_planner_dropout": self.coarse_planner.dropout,
-            "coarse_planner_loss": self.coarse_planner.loss,
-            "coarse_planner_loss_weight": self.coarse_planner.loss_weight,
-            "coarse_planner_latent_loss_weight": self.coarse_planner.latent_loss_weight,
-            "coarse_planner_chunk_loss_weight": self.coarse_planner.chunk_loss_weight,
-            "coarse_planner_gripper_loss_weight": self.coarse_planner.gripper_loss_weight,
-            "coarse_planner_segment_autoencoder_checkpoint": self.coarse_planner.segment_autoencoder_checkpoint,
-            "coarse_planner_input_memory": self.coarse_planner.input_memory,
-            "coarse_planner_placement": self.coarse_planner.placement,
-            "coarse_planner_gripper_indices": list(self.coarse_planner.gripper_indices),
             "progress_planner_enabled": self.progress_planner.enabled,
             "progress_planner_checkpoint": self.progress_planner.checkpoint,
             "finetune_progress_planner": self.progress_planner.finetune,
@@ -654,15 +561,6 @@ def _coerce_str_tuple(value: Any, label: str) -> tuple[str, ...]:
         except TypeError as exc:
             raise ValueError(f"{label} must be a sequence of strings") from exc
     return tuple(str(item) for item in values)
-
-
-def _validate_action_indices(indices: tuple[int, ...], action_dim: int, label: str) -> None:
-    for index in indices:
-        value = int(index)
-        if value < 0:
-            value += action_dim
-        if value < 0 or value >= action_dim:
-            raise ValueError(f"{label} index {index} is out of range for action_dim {action_dim}")
 
 
 def _deep_merge(base: Mapping[str, Any], override: Mapping[str, Any]) -> dict[str, Any]:

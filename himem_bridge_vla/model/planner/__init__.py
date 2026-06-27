@@ -1,13 +1,10 @@
-"""Coarse planner modules for Bridge-HiMem action conditioning."""
+"""Planner modules for Bridge-HiMem action conditioning."""
 
 from .action_segment_autoencoder import ActionSegmentAutoencoder
 from .action_segment_autoencoder import ActionSegmentAutoencoderConfig
 from .action_segment_autoencoder import ActionSegmentAutoencoderOutput
 from .action_segment_autoencoder import action_segment_autoencoder_loss
 from .action_segment_autoencoder import action_segment_reconstruction_loss
-from .coarse_planner import CoarsePlanner
-from .coarse_planner import CoarsePlannerConfig
-from .coarse_planner import CoarsePlannerOutput
 from .progress_state import ActionSummaryEncoder
 from .progress_state import ProgressEvidenceEncoder
 from .progress_state import ProgressPlanner
@@ -31,9 +28,6 @@ __all__ = [
     "ActionSummaryEncoder",
     "action_segment_autoencoder_loss",
     "action_segment_reconstruction_loss",
-    "CoarsePlanner",
-    "CoarsePlannerConfig",
-    "CoarsePlannerOutput",
     "effective_rank",
     "progress_diagnostics",
     "progress_intent_alignment_loss",

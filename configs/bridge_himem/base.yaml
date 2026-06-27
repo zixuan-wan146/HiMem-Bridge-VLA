@@ -43,28 +43,6 @@ skill:
   enabled: false
   num_tokens: 4
 
-coarse_planner:
-  enabled: false
-  type: query_cross_attention
-  hidden_dim: 896
-  num_layers: 4
-  num_heads: 8
-  num_plan_steps: 1
-  planning_horizon: 32
-  latent_dim: 128
-  latent_head_hidden_dim: 512
-  segment_action_dim: 7
-  dropout: 0.05
-  loss: intent_latent
-  loss_weight: 0.2
-  latent_loss_weight: 1.0
-  chunk_loss_weight: 0.25
-  gripper_loss_weight: 2.0
-  segment_autoencoder_checkpoint:
-  input_memory: false
-  placement: direct_action_condition
-  gripper_indices: [-1]
-
 progress_planner:
   enabled: false
   checkpoint:

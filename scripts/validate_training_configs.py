@@ -17,12 +17,14 @@ from himem_bridge_vla.training_config import (  # noqa: E402
     resolve_training_config_paths,
     validate_training_config,
 )
+from himem_bridge_vla.experiment_config import resolve_experiment_config  # noqa: E402
 from himem_bridge_vla.path_utils import display_project_path  # noqa: E402
 
 PROFILE_PATH_KEYS = (
     "dataset_config_path",
     "dataset_config_base_dir",
     "bridge_himem_config",
+    "progress_planner_checkpoint",
     "resume_path",
     "save_dir",
     "cache_dir",
@@ -35,13 +37,20 @@ def main() -> int:
         "configs",
         nargs="*",
         type=Path,
-        help="Specific training YAML profiles to validate. Defaults to configs/training/*.yaml.",
+        help=(
+            "Specific training YAML profiles to validate. Defaults to configs/stage1/*.yaml, "
+            "configs/training/*.yaml, and configs/training_templates/*.yaml."
+        ),
     )
     args = parser.parse_args()
 
-    paths = args.configs or sorted((REPO_ROOT / "configs" / "training").glob("*.yaml"))
+    paths = args.configs or (
+        sorted((REPO_ROOT / "configs" / "stage1").glob("*.yaml"))
+        + sorted((REPO_ROOT / "configs" / "training").glob("*.yaml"))
+        + sorted((REPO_ROOT / "configs" / "training_templates").glob("*.yaml"))
+    )
     if not paths:
-        print("validated 0 training config(s); configs/training is empty")
+        print("validated 0 training config(s); configs/stage1, configs/training, and configs/training_templates are empty")
         return 0
 
     for path in paths:
@@ -50,6 +59,7 @@ def main() -> int:
         validate_profile_paths_are_relative(file_config, config_path)
         config = merge_training_config(default_training_config(REPO_ROOT), file_config=file_config)
         config = resolve_training_config_paths(config, REPO_ROOT)
+        config = resolve_experiment_config(config)
         validate_training_config(config, cuda_available=True, repo_root=REPO_ROOT)
         print(
             f"{display_project_path(config_path, REPO_ROOT)}: run={config['run_name']} dataset={config['dataset_config_path']} "

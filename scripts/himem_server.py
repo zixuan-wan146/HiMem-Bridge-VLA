@@ -112,10 +112,12 @@ class RuntimePolicyState:
     def __init__(self) -> None:
         self.executed_actions: torch.Tensor | None = None
         self.executed_action_mask: torch.Tensor | None = None
+        self.previous_visual_tokens: torch.Tensor | None = None
 
     def reset(self, model: HiMemBridgeVLA) -> None:
         self.executed_actions = None
         self.executed_action_mask = None
+        self.previous_visual_tokens = None
         model.reset_progress_state()
 
     def progress_inputs(
@@ -160,6 +162,71 @@ class RuntimePolicyState:
             action = torch.cat([action, pad], dim=1)
         self.executed_actions = action.cpu()
         self.executed_action_mask = torch.ones(action.shape[:2], dtype=torch.bool)
+
+    def short_memory_inputs(
+        self,
+        model: HiMemBridgeVLA,
+        *,
+        device: torch.device,
+        dtype: torch.dtype,
+    ) -> tuple[torch.Tensor | None, torch.Tensor | None, torch.Tensor | None]:
+        if not bool(getattr(model, "use_direct_bridge", False)):
+            return None, None, None
+        capacity = int(model.config.get("memory_short_capacity", 2))
+        entry_tokens = int(model.config.get("memory_entry_tokens", 16))
+        hidden_dim = int(model.config.get("embed_dim", 896))
+        if capacity <= 0 or entry_tokens <= 0:
+            return None, None, None
+
+        memory = torch.zeros(1, capacity * entry_tokens, hidden_dim, device=device, dtype=dtype)
+        mask = torch.zeros(1, capacity * entry_tokens, device=device, dtype=torch.bool)
+        time_ids = torch.arange(capacity, device=device, dtype=torch.long).repeat_interleave(entry_tokens)
+        time_ids = time_ids.unsqueeze(0)
+
+        if self.previous_visual_tokens is not None:
+            packed = _pack_runtime_visual_tokens(
+                self.previous_visual_tokens.to(device=device, dtype=dtype),
+                target_tokens=entry_tokens,
+            )
+            memory[:, :entry_tokens, :] = packed
+            mask[:, :entry_tokens] = True
+        return memory, mask, time_ids
+
+    def store_visual_tokens(self, visual_tokens: torch.Tensor | None) -> None:
+        if visual_tokens is None:
+            return
+        if visual_tokens.ndim != 3 or visual_tokens.shape[0] != 1:
+            raise ValueError(f"visual_tokens must have shape [1, N, D], got {tuple(visual_tokens.shape)}")
+        self.previous_visual_tokens = visual_tokens.detach().cpu()
+
+
+def _pack_runtime_visual_tokens(tokens: torch.Tensor, *, target_tokens: int) -> torch.Tensor:
+    if tokens.ndim == 2:
+        tokens = tokens.unsqueeze(0)
+    if tokens.ndim != 3 or tokens.shape[0] != 1:
+        raise ValueError(f"tokens must have shape [1, N, D] or [N, D], got {tuple(tokens.shape)}")
+    target_tokens = int(target_tokens)
+    if target_tokens <= 0:
+        raise ValueError("target_tokens must be positive")
+    token_count = int(tokens.shape[1])
+    if token_count <= 0:
+        raise ValueError("visual token sequence must be non-empty")
+    if token_count == target_tokens:
+        return tokens.contiguous()
+    if token_count < target_tokens:
+        output = torch.zeros(1, target_tokens, tokens.shape[-1], device=tokens.device, dtype=tokens.dtype)
+        output[:, :token_count, :] = tokens
+        return output
+
+    boundaries = torch.linspace(0, token_count, steps=target_tokens + 1, device=tokens.device).round().long()
+    output = torch.zeros(1, target_tokens, tokens.shape[-1], device=tokens.device, dtype=tokens.dtype)
+    for index in range(target_tokens):
+        start = int(boundaries[index].item())
+        end = int(boundaries[index + 1].item())
+        if end <= start:
+            end = min(token_count, start + 1)
+        output[:, index, :] = tokens[:, start:end, :].mean(dim=1)
+    return output
 
 
 def decode_image_from_list(img_list, device) -> torch.Tensor:
@@ -223,13 +290,21 @@ def infer_from_json_dict(data: dict, model, normalizer, runtime_state: RuntimePo
         if hasattr(embedding_output, "fused_tokens"):
             fused_tokens = embedding_output.fused_tokens
             hidden_states = embedding_output.hidden_states
+            visual_tokens = getattr(embedding_output, "visual_tokens", None)
         else:
             fused_tokens = embedding_output
             hidden_states = None
+            visual_tokens = None
 
         executed_actions, executed_action_mask = (None, None)
+        memory_context, memory_context_mask, short_memory_time_ids = (None, None, None)
         if runtime_state is not None:
             executed_actions, executed_action_mask = runtime_state.progress_inputs(
+                model,
+                device=device,
+                dtype=fused_tokens.dtype,
+            )
+            memory_context, memory_context_mask, short_memory_time_ids = runtime_state.short_memory_inputs(
                 model,
                 device=device,
                 dtype=fused_tokens.dtype,
@@ -240,6 +315,9 @@ def infer_from_json_dict(data: dict, model, normalizer, runtime_state: RuntimePo
             norm_state,
             action_mask=action_mask,
             hidden_states=hidden_states,
+            memory_context=memory_context,
+            memory_context_mask=memory_context_mask,
+            short_memory_time_ids=short_memory_time_ids,
             executed_actions=executed_actions,
             executed_action_mask=executed_action_mask,
         )
@@ -248,6 +326,7 @@ def infer_from_json_dict(data: dict, model, normalizer, runtime_state: RuntimePo
         normalized_action = action.reshape(1, -1, model_action_dim)
         if runtime_state is not None:
             runtime_state.store_executed_actions(model, normalized_action)
+            runtime_state.store_visual_tokens(visual_tokens)
         denormalized_action = normalizer.denormalize_action(normalized_action[0], robot_key=robot_key)
         actions = denormalized_action.cpu().numpy().tolist()
         if not request["return_debug"]:
@@ -306,6 +385,8 @@ if __name__ == "__main__":
             args.host,
             args.port,
             max_size=DEFAULT_MAX_MESSAGE_SIZE,
+            ping_interval=None,
+            ping_timeout=None,
         ):
             await asyncio.Future()
 

@@ -73,6 +73,7 @@ class LiberoClientConfig:
     result_file: str
     num_episodes: int
     task_limit: int
+    task_offset: int
     seed: int
     mujoco_gl: str
 
@@ -99,6 +100,7 @@ class LiberoClientConfig:
             result_file=result_file,
             num_episodes=env_int(environ, "HIMEM_LIBERO_EPISODES", 10),
             task_limit=env_int(environ, "HIMEM_LIBERO_TASK_LIMIT", 0),
+            task_offset=env_int(environ, "HIMEM_LIBERO_TASK_OFFSET", 0),
             seed=env_int(environ, "HIMEM_LIBERO_SEED", 42),
             mujoco_gl=environ.get("HIMEM_MUJOCO_GL", "osmesa"),
         )
@@ -120,6 +122,8 @@ class LiberoClientConfig:
             raise ValueError(f"HIMEM_LIBERO_EPISODES must be positive, got {self.num_episodes}")
         if self.task_limit < 0:
             raise ValueError(f"HIMEM_LIBERO_TASK_LIMIT must be non-negative, got {self.task_limit}")
+        if self.task_offset < 0:
+            raise ValueError(f"HIMEM_LIBERO_TASK_OFFSET must be non-negative, got {self.task_offset}")
         invalid_max_steps = [value for value in self.max_steps if value <= 0]
         if invalid_max_steps:
             raise ValueError(f"HIMEM_LIBERO_MAX_STEPS values must be positive, got {invalid_max_steps}")

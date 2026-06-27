@@ -42,11 +42,13 @@ from himem_bridge_vla.dataset.memory_token_cache import ImageStatsVLMHiddenState
 from himem_bridge_vla.dataset.memory_token_cache import InternVL3VisualTokenEncoder
 from himem_bridge_vla.dataset.memory_token_cache import InternVL3VLMHiddenStateEncoder
 from himem_bridge_vla.dataset.memory_token_cache import MemoryTokenCacheDataset
+from himem_bridge_vla.dataset.memory_token_cache import MemoryTokenCacheTrajectoryDataset
 from himem_bridge_vla.dataset.memory_token_cache import TokenCacheBuildResult
 from himem_bridge_vla.dataset.memory_token_cache import TokenCacheDatasetConfig
 from himem_bridge_vla.dataset.memory_token_cache import TokenCacheShard
 from himem_bridge_vla.dataset.memory_token_cache import build_memory_replay_token_cache
 from himem_bridge_vla.dataset.memory_token_cache import collate_direct_bridge_token_cache_samples
+from himem_bridge_vla.dataset.memory_token_cache import collate_direct_bridge_token_cache_windows
 from himem_bridge_vla.dataset.memory_token_cache import collate_memory_token_cache_samples
 from himem_bridge_vla.dataset.memory_token_cache import concat_tokens_by_view
 from himem_bridge_vla.dataset.memory_token_cache import encode_images_by_view
@@ -98,6 +100,7 @@ __all__ = [
     "LiberoProgressWarmupBuildResult",
     "LiberoProgressWarmupDataset",
     "MemoryTokenCacheDataset",
+    "MemoryTokenCacheTrajectoryDataset",
     "TokenCacheBuildResult",
     "TokenCacheDatasetConfig",
     "TokenCacheShard",
@@ -124,6 +127,7 @@ __all__ = [
     "build_rmbench_state_matrix",
     "build_rmbench_state_vector",
     "collate_direct_bridge_token_cache_samples",
+    "collate_direct_bridge_token_cache_windows",
     "collate_libero_progress_warmup_windows",
     "collate_memory_token_cache_samples",
     "collate_memory_replay_frames",

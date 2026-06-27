@@ -525,7 +525,7 @@ lambda_plan = 0.25
 
 visual branch 是主要感知证据来源，包含当前场景、物体位置和近期历史视觉变化，信息量和动态变化都更大，因此允许更大的 adaptive range。
 
-plan tokens 是 high-level intent / coarse plan。它应该 bias action generation，而不是 dominate action generation，所以调节范围小一点更稳。
+plan tokens 是 high-level intent / task plan。它应该 bias action generation，而不是 dominate action generation，所以调节范围小一点更稳。
 
 重点不是说 VLM 一定比 plan 重要，而是 visual evidence 应该有更大的动态调节空间，plan 应该稳定提供意图偏置。
 

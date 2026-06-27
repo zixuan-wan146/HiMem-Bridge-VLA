@@ -96,9 +96,9 @@ def test_himem_bridge_vla_progress_planner_helper_outputs_plan_token():
     policy = HiMemBridgeVLA.__new__(HiMemBridgeVLA)
     torch.nn.Module.__init__(policy)
     policy.progress_state_planner = ProgressStatePlanner(config)
+    policy.config = {"finetune_progress_planner": False}
     policy.runtime_progress_state = None
     policy.last_progress_planner_output = None
-    policy.last_coarse_planner_output = None
     policy.train()
 
     plan = policy._get_or_update_progress_plan_tokens(
@@ -131,9 +131,9 @@ def test_himem_bridge_vla_progress_planner_accepts_explicit_vl_summary():
     policy = HiMemBridgeVLA.__new__(HiMemBridgeVLA)
     torch.nn.Module.__init__(policy)
     policy.progress_state_planner = ProgressStatePlanner(config)
+    policy.config = {"finetune_progress_planner": False}
     policy.runtime_progress_state = None
     policy.last_progress_planner_output = None
-    policy.last_coarse_planner_output = None
     policy.train()
 
     plan = policy._get_or_update_progress_plan_tokens(

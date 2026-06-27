@@ -60,7 +60,7 @@ def test_dataset_cache_namespace_changes_when_action_segment_config_changes(tmp_
         max_samples_per_file=None,
         action_segment_config=None,
     )
-    coarse = dataset_cache_namespace(
+    with_segments = dataset_cache_namespace(
         config,
         dataset_path,
         action_horizon=14,
@@ -69,4 +69,4 @@ def test_dataset_cache_namespace_changes_when_action_segment_config_changes(tmp_
     )
 
     assert base == explicit_none
-    assert base != coarse
+    assert base != with_segments

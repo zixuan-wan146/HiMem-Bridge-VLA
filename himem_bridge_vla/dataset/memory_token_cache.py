@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from bisect import bisect_right
+from collections import defaultdict
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 import json
@@ -678,6 +679,192 @@ class MemoryTokenCacheDataset:
         self._loaded_shard_index = shard_index
         self._loaded_shard_samples = samples
         return samples
+
+
+class MemoryTokenCacheTrajectoryDataset:
+    """Trajectory-window view over a memory-token cache.
+
+    The underlying cache is one row per replan point. This wrapper groups rows
+    by episode and returns burn-in + loss windows so recurrent progress memory
+    is updated chronologically instead of being reset for random frame batches.
+    """
+
+    INDEX_VERSION = 1
+
+    def __init__(
+        self,
+        manifest_path: str | Path,
+        *,
+        burnin_replan_steps: int = 8,
+        loss_replan_steps: int = 8,
+        allow_short_burnin: bool = True,
+        action_horizon: int = 32,
+        window_stride: int = 1,
+        max_samples: int | None = None,
+    ) -> None:
+        burnin_replan_steps = int(burnin_replan_steps)
+        loss_replan_steps = int(loss_replan_steps)
+        action_horizon = int(action_horizon)
+        window_stride = int(window_stride)
+        if burnin_replan_steps < 0:
+            raise ValueError("burnin_replan_steps must be non-negative")
+        if loss_replan_steps <= 0:
+            raise ValueError("loss_replan_steps must be positive")
+        if action_horizon <= 0:
+            raise ValueError("action_horizon must be positive")
+        if window_stride <= 0:
+            raise ValueError("window_stride must be positive")
+
+        self.base = MemoryTokenCacheDataset(manifest_path, max_samples=max_samples)
+        self.manifest_path = self.base.manifest_path
+        self.manifest = self.base.manifest
+        self.config = self.base.config
+        self.normalization = self.base.normalization
+        self.arm2stats_dict = self.base.arm2stats_dict
+        self.burnin_replan_steps = burnin_replan_steps
+        self.loss_replan_steps = loss_replan_steps
+        self.allow_short_burnin = bool(allow_short_burnin)
+        self.action_horizon = action_horizon
+        self.window_stride = window_stride
+
+        rows = self._load_or_build_trajectory_index()
+        if self.base.sample_count < int(self.manifest["sample_count"]):
+            rows = [row for row in rows if int(row["sample_index"]) < self.base.sample_count]
+        self.windows = tuple(self._build_windows(rows))
+        if not self.windows:
+            raise ValueError(
+                "trajectory token-cache dataset produced no windows; check burnin/loss length and action horizon"
+            )
+
+    def __len__(self) -> int:
+        return len(self.windows)
+
+    def __getitem__(self, index: int) -> dict[str, Any]:
+        window = self.windows[int(index)]
+        return {
+            "samples": [self.base[int(sample_index)] for sample_index in window["sample_indices"]],
+            "loss_mask": list(window["loss_mask"]),
+            "episode_id": str(window["episode_id"]),
+            "start_step": int(window["start_step"]),
+        }
+
+    def _load_or_build_trajectory_index(self) -> list[dict[str, Any]]:
+        index_path = self.manifest_path.parent / "trajectory_index.json"
+        if index_path.exists():
+            with index_path.open("r", encoding="utf-8") as handle:
+                payload = json.load(handle)
+            rows = payload.get("rows")
+            if (
+                payload.get("format") == "memory_token_cache_trajectory_index"
+                and int(payload.get("version", -1)) == self.INDEX_VERSION
+                and int(payload.get("sample_count", -1)) == int(self.manifest["sample_count"])
+                and isinstance(rows, list)
+            ):
+                return rows
+
+        rows: list[dict[str, Any]] = []
+        for shard in self.base.shards:
+            payload = _torch_load(shard.path)
+            samples = list(payload.get("samples", []))
+            if len(samples) != shard.sample_count:
+                raise ValueError(f"invalid sample count in shard {shard.path}")
+            for local_index, sample in enumerate(samples):
+                rows.append(
+                    {
+                        "sample_index": int(sample.get("sample_index", shard.start_index + local_index)),
+                        "benchmark": str(sample["benchmark"]),
+                        "episode_id": str(sample["episode_id"]),
+                        "current_step": int(sample["current_step"]),
+                        "action_valid_count": int(sample["action_valid_count"]),
+                    }
+                )
+        payload = {
+            "format": "memory_token_cache_trajectory_index",
+            "version": self.INDEX_VERSION,
+            "sample_count": int(self.manifest["sample_count"]),
+            "rows": rows,
+        }
+        with index_path.open("w", encoding="utf-8") as handle:
+            json.dump(payload, handle)
+            handle.write("\n")
+        return rows
+
+    def _build_windows(self, rows: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
+        episodes: dict[tuple[str, str], list[Mapping[str, Any]]] = defaultdict(list)
+        for row in rows:
+            episodes[(str(row["benchmark"]), str(row["episode_id"]))].append(row)
+
+        windows: list[dict[str, Any]] = []
+        for (_benchmark, episode_id), episode_rows in episodes.items():
+            ordered = sorted(episode_rows, key=lambda row: (int(row["current_step"]), int(row["sample_index"])))
+            valid_loss_positions = {
+                pos for pos, row in enumerate(ordered) if int(row["action_valid_count"]) >= self.action_horizon
+            }
+            max_start = len(ordered) - self.loss_replan_steps
+            for start_pos in range(0, max_start + 1, self.window_stride):
+                loss_positions = range(start_pos, start_pos + self.loss_replan_steps)
+                if any(pos not in valid_loss_positions for pos in loss_positions):
+                    continue
+                if not self.allow_short_burnin and start_pos < self.burnin_replan_steps:
+                    continue
+                burnin_start = max(0, start_pos - self.burnin_replan_steps)
+                selected = ordered[burnin_start : start_pos + self.loss_replan_steps]
+                burnin_count = start_pos - burnin_start
+                windows.append(
+                    {
+                        "episode_id": episode_id,
+                        "start_step": int(ordered[start_pos]["current_step"]),
+                        "sample_indices": [int(row["sample_index"]) for row in selected],
+                        "loss_mask": [False] * burnin_count + [True] * self.loss_replan_steps,
+                    }
+                )
+        return windows
+
+
+def collate_direct_bridge_token_cache_windows(
+    batch: Sequence[Mapping[str, Any]],
+    *,
+    memory_entry_tokens: int = 16,
+    action_horizon: int | None = None,
+    view_names: Sequence[str] | None = None,
+) -> dict[str, Any]:
+    """Collate trajectory windows into per-timestep active mini-batches."""
+
+    if not batch:
+        raise ValueError("batch must contain at least one window")
+    torch = _require_torch()
+    max_length = max(len(window["samples"]) for window in batch)
+    steps = []
+    for step_index in range(max_length):
+        active_samples = []
+        batch_indices = []
+        loss_mask = []
+        for batch_index, window in enumerate(batch):
+            samples = list(window["samples"])
+            if step_index >= len(samples):
+                continue
+            active_samples.append(samples[step_index])
+            batch_indices.append(batch_index)
+            loss_mask.append(bool(window["loss_mask"][step_index]))
+        if not active_samples:
+            continue
+        step_batch = collate_direct_bridge_token_cache_samples(
+            active_samples,
+            memory_entry_tokens=memory_entry_tokens,
+            action_horizon=action_horizon,
+            view_names=view_names,
+        )
+        step_batch["batch_indices"] = torch.tensor(batch_indices, dtype=torch.long)
+        step_batch["loss_mask"] = torch.tensor(loss_mask, dtype=torch.bool)
+        steps.append(step_batch)
+    if not steps:
+        raise ValueError("trajectory window batch contains no active steps")
+    return {
+        "trajectory_steps": steps,
+        "batch_size": len(batch),
+        "episode_id": [str(window["episode_id"]) for window in batch],
+        "start_step": torch.tensor([int(window["start_step"]) for window in batch], dtype=torch.long),
+    }
 
 
 def collate_memory_token_cache_samples(batch: Sequence[Mapping[str, Any]]) -> dict[str, Any]:

@@ -21,20 +21,24 @@ memory_entry_tokens: 16
 num_layers: 8
 action_head_ffn_dim: 3584
 num_plan_slots: 8
-short_memory_time_bins: 2
+short_memory_time_bins: 4
 max_vlm_tokens:
+
+memory_token_cache_sequence_training: true
+burnin_replan_steps: 8
+loss_replan_steps: 8
+allow_short_burnin: true
+trajectory_window_stride: 1
 
 finetune_vlm: false
 finetune_action_head: true
 finetune_progress_planner: false
-finetune_coarse_planner: false
 
 enable_bridge_aux_loss: false
-enable_coarse_planner_loss: false
 
 max_steps: 10000
 warmup_steps: 1000
-batch_size: 32
+batch_size: 4
 num_workers: 4
 log_interval: 10
 ckpt_interval: 5000
@@ -42,6 +46,7 @@ best_ckpt_interval: 1000
 best_ckpt_min_step: 1000
 
 lr: 5.0e-5
+min_lr_ratio: 0.1
 weight_decay: 1.0e-3
 grad_clip_norm: 1.0
 dropout: 0.1

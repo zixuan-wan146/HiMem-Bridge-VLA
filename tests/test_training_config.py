@@ -160,6 +160,24 @@ def test_validate_training_config_requires_resume_for_resume_pretrain():
         )
 
 
+def test_validate_training_config_rejects_random_frozen_progress_planner():
+    config = valid_config()
+    config.update(
+        {
+            "progress_planner_enabled": True,
+            "progress_planner_checkpoint": None,
+            "finetune_progress_planner": False,
+        }
+    )
+
+    with pytest.raises(ValueError, match="random frozen progress planner"):
+        validate_training_config(
+            config,
+            cuda_available=False,
+            path_exists=existing_paths("configs/datasets/simulation.yaml"),
+        )
+
+
 def test_training_yaml_config_merges_with_cli_overrides(tmp_path):
     config_path = tmp_path / "train.yaml"
     config_path.write_text(

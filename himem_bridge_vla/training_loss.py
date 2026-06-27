@@ -90,42 +90,6 @@ def masked_latent_mse_loss(
     return (per_step * mask).sum() / active_steps
 
 
-def coarse_planner_intent_loss(
-    predicted_latents: Any,
-    target_latents: Any,
-    decoded_segments: Any,
-    target_segments: Any,
-    segment_mask: Any,
-    *,
-    latent_loss_weight: float = 1.0,
-    chunk_loss_weight: float = 1.0,
-    gripper_indices: Any = (-1,),
-    gripper_loss_weight: float = 1.0,
-    token_loss_weights: Any = None,
-) -> Any:
-    """Planner auxiliary loss: latent regression plus decoded chunk reconstruction."""
-
-    from himem_bridge_vla.model.planner import action_segment_reconstruction_loss
-
-    weighted_mask = _apply_token_loss_weights(
-        segment_mask.to(device=predicted_latents.device, dtype=predicted_latents.dtype),
-        token_loss_weights,
-    )
-    latent_loss = masked_latent_mse_loss(
-        predicted_latents,
-        target_latents,
-        weighted_mask,
-    )
-    chunk_loss = action_segment_reconstruction_loss(
-        decoded_segments,
-        target_segments,
-        weighted_mask,
-        gripper_indices=gripper_indices,
-        gripper_loss_weight=gripper_loss_weight,
-    )
-    return float(latent_loss_weight) * latent_loss + float(chunk_loss_weight) * chunk_loss
-
-
 def _apply_token_loss_weights(mask: Any, token_loss_weights: Any = None) -> Any:
     if mask.ndim == 3 and mask.shape[-1] == 1:
         mask = mask.squeeze(-1)
@@ -141,22 +105,3 @@ def _apply_token_loss_weights(mask: Any, token_loss_weights: Any = None) -> Any:
     if weights.min().item() <= 0.0:
         raise ValueError("token_loss_weights must be positive")
     return mask * weights.unsqueeze(0)
-
-
-def _normalize_indices(indices: Any, action_dim: int) -> tuple[int, ...]:
-    if indices is None:
-        return ()
-    if isinstance(indices, int):
-        raw_indices = (indices,)
-    else:
-        raw_indices = tuple(indices)
-    normalized = []
-    for index in raw_indices:
-        value = int(index)
-        if value < 0:
-            value += action_dim
-        if value < 0 or value >= action_dim:
-            raise ValueError(f"gripper index {index} is out of range for action_dim {action_dim}")
-        if value not in normalized:
-            normalized.append(value)
-    return tuple(normalized)

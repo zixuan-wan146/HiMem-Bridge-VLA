@@ -77,7 +77,6 @@ docs/engineering_reproducibility.md           reproducibility and warm-up comman
 docs/bridge_himem_design.md                   Progress-state planner surface
 docs/direct_bridge_attention_design_zh.md     Direct bridge-attn action-head design
 docs/project_structure.md                     code/config/docs/output boundaries
-coarse_planner/README.md                      legacy H32 baseline commands
 ```
 
 ## Next Work

@@ -19,9 +19,6 @@ memory:
   compression:
     entry_tokens: 16
 
-coarse_planner:
-  enabled: false
-
 progress_planner:
   enabled: true
   checkpoint: local_data/runs/progress_warmup/libero_progress_state_planner_h32_r16_w4_bs12800_epval_v1/best.pt
@@ -39,4 +36,4 @@ action_head:
   num_plan_slots: 8
   visual_gate_lambda: 0.5
   plan_gate_lambda: 0.25
-  short_memory_time_bins: 2
+  short_memory_time_bins: 4

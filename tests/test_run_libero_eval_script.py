@@ -43,7 +43,7 @@ def test_run_libero_eval_script_uses_full_eval_defaults():
     assert env["HIMEM_LIBERO_TASK_SUITES"] == "libero_spatial,libero_object,libero_goal,libero_10"
     assert env["HIMEM_LIBERO_TASK_LIMIT"] == "0"
     assert env["HIMEM_LIBERO_MAX_STEPS"] == "25,25,25,95"
-    assert env["HIMEM_LIBERO_HORIZON"] == "14"
+    assert env["HIMEM_LIBERO_HORIZON"] == "16"
     assert env["HIMEM_LIBERO_TRANSITION_REPLAN_ACTION_LIMIT"] == "0"
     assert env["HIMEM_LIBERO_TRANSITION_DATASET_NAME"] == ""
     assert env["HIMEM_LIBERO_CKPT_NAME"] == "HiMem_libero_eval"

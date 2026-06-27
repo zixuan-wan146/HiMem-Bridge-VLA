@@ -11,7 +11,6 @@ configs/
   deepspeed/               DeepSpeed 配置
   libero_profiles/         LIBERO smoke/full-eval 环境 profile
 
-coarse_planner/            legacy H32 action-intent cache、AE、planner baseline
 himem_bridge_vla/          package code: config、dataset、model、runtime helpers
 evaluations/libero/        LIBERO client、action 协议、result summary
 evaluations/rmbench/       RMBench policy adapter 和 eval plan helpers
@@ -45,7 +44,6 @@ docs/benchmark_plan.md
 docs/bridge_himem_design.md
 docs/direct_bridge_attention_design_zh.md
 docs/vla_adapter_bridge_attention_notes_zh.md
-coarse_planner/README.md
 configs/README.md
 scripts/README.md
 ```
@@ -56,8 +54,7 @@ scripts/README.md
 
 - 新 Bridge-HiMem 实验只改 `configs/bridge_himem/experiments/*.yaml`，不要在模型里写死实验参数。
 - 共享默认值只改 `configs/bridge_himem/base.yaml`。
-- Legacy H32 standalone planner 配置只放在 `coarse_planner/configs/`。
-- New progress-state planner 配置应使用新的 experiment 名称，不要复用旧 `coarse_planner_crosskv` 语义。
+- Progress-state planner 配置应使用清晰的 experiment 名称，避免复用历史实验语义。
 - 修改 YAML 后先跑 `python scripts/validate_bridge_himem_configs.py`。
 
 ## 分工边界
@@ -66,9 +63,9 @@ scripts/README.md
 - `experiment_config.py`：训练/模型共用 config 解析。
 - `model/bridge`：legacy bridge modules 和 bridge token 生成。
 - `model/himem`：short visual-token memory 相关结构；旧 long visual FIFO 不再作为主线。
-- `model/planner`：新增 progress-state planner、progress state updater、condition builder；legacy `CoarsePlanner` 保留为 baseline。
-- `coarse_planner/`：standalone cache、AE、H32 action-latent baseline 训练和评估。
+- `model/planner`：progress-state planner、progress state updater、condition builder，以及 action segment autoencoder。
 - `model/himem_bridge_vla.py`：主模型入口；direct bridge 模式连接 VLM hidden states、short memory、progress planner plan token、state 和 flow-matching action head。
 - `dataset/action_segments.py`：future action segment 切分和 segment mask。
 - `scripts/himem_server.py`：模型服务和 server protocol；当前路径不加载 transition trigger。
-- `scripts/train.py`：训练流程、日志、checkpoint；新增结构必须通过 config 接入。
+- `himem_bridge_vla/training/stage1/`：active LIBERO Stage1 trajectory-window token-cache 训练逻辑。
+- `scripts/train_stage1.py`：active Stage1 训练入口；旧 `scripts/train.py` 是混合历史入口，不作为当前主线。
