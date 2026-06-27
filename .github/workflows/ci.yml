@@ -17,4 +17,4 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install -r requirements-dev.txt
       - name: Run repository checks
-        run: EVO1_CHECK_REQUIRE_RUFF=1 scripts/check_repo.sh
+        run: EVO1_CHECK_REQUIRE_RUFF=1 scripts/quality/check_repo.sh

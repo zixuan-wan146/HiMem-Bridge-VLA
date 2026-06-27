@@ -71,15 +71,15 @@ $AUTODL_TMP/libero/datasets/libero_100      missing
 当前已经具备的工程入口：
 
 ```text
-scripts/build_libero_memory_replay_index.py
+scripts/cache/build_libero_memory_replay_index.py
 himem_bridge_vla/dataset/memory_replay_frames.py
 himem_bridge_vla/dataset/memory_replay_dataset.py
-scripts/build_memory_replay_token_cache.py
+scripts/cache/build_memory_replay_token_cache.py
 himem_bridge_vla/dataset/memory_token_cache.py
-evaluations/libero/libero_client_4tasks.py
-scripts/run_libero_smoke.sh
-scripts/run_libero_eval.sh
-scripts/plan_libero_run.py
+evaluations/legacy/libero/libero_client_4tasks.py
+scripts/eval/run_libero_smoke.sh
+scripts/eval/run_libero_eval.sh
+scripts/eval/plan_libero_run.py
 ```
 
 memory 设置：
@@ -122,7 +122,7 @@ https://arxiv.org/abs/2510.13626
 
 `exact root` 是我们在本机用于定位“目标 benchmark 的真实代码/数据根目录”的路径。
 
-对于 LIBERO-Plus，当前 `scripts/inspect_benchmarks.py` 默认检查：
+对于 LIBERO-Plus，当前 `scripts/eval/inspect_benchmarks.py` 默认检查：
 
 ```text
 $AUTODL_TMP/libero_plus
@@ -275,17 +275,17 @@ endpose/right_endpose      [T, 7]
 
 ```text
 himem_bridge_vla/dataset/rmbench.py
-scripts/build_rmbench_norm_stats.py
-scripts/build_rmbench_memory_replay_index.py
+scripts/cache/build_rmbench_norm_stats.py
+scripts/cache/build_rmbench_memory_replay_index.py
 himem_bridge_vla/dataset/memory_replay_frames.py
 himem_bridge_vla/dataset/memory_replay_dataset.py
-scripts/build_memory_replay_token_cache.py
+scripts/cache/build_memory_replay_token_cache.py
 himem_bridge_vla/dataset/memory_token_cache.py
-scripts/plan_rmbench_eval.py
-evaluations/rmbench/policy/HiMemBridgeVLA/
-scripts/install_rmbench_policy_adapter.py
-scripts/write_rmbench_run_manifest.py
-scripts/run_rmbench_eval.sh
+scripts/eval/plan_rmbench_eval.py
+evaluations/legacy/rmbench/policy/HiMemBridgeVLA/
+scripts/setup/install_rmbench_policy_adapter.py
+scripts/report/write_rmbench_run_manifest.py
+scripts/eval/run_rmbench_eval.sh
 ```
 
 memory 设置：

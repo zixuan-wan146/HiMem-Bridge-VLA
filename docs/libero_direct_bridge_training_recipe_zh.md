@@ -832,7 +832,7 @@ batch:
 
 ## 17. Eval And Checkpoint
 
-当前 `scripts/train_stage1.py` 是 Stage 1 的 active 训练入口，只支持 trajectory-window token cache、frozen W4 ProgressPlanner、direct bridge action head 和 masked flow-matching loss。它只实现 training loss 记录和 checkpoint 保存；还没有内置 episode-level validation loop。因此当前 `step_best` 是按训练 loss 监控得到的 health checkpoint，不应被解释为 validation-best checkpoint。
+当前 `scripts/train/stage1/libero.py` 是 Stage 1 的 active 训练入口，只支持 trajectory-window token cache、frozen W4 ProgressPlanner、direct bridge action head 和 masked flow-matching loss。它只实现 training loss 记录和 checkpoint 保存；还没有内置 episode-level validation loop。因此当前 `step_best` 是按训练 loss 监控得到的 health checkpoint，不应被解释为 validation-best checkpoint。
 
 当前实现使用：
 

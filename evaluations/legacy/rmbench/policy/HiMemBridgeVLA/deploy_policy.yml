@@ -1,0 +1,28 @@
+# Basic experiment configuration used by RMBench official script/eval_policy.py
+policy_name: HiMemBridgeVLA
+task_name: null
+task_config: null
+ckpt_setting: null
+seed: 0
+instruction_type: unseen
+
+# HiMem-Bridge-VLA websocket server.
+# Start it from this repo with scripts/serve/start_himem_server.sh before running RMBench eval.
+server_uri: ws://127.0.0.1:9000
+request_timeout: 120.0
+
+# RMBench demo_clean / ALOHA qpos protocol.
+action_horizon: 32
+action_dim: 14
+action_type: qpos
+
+# Training readers currently use endpose + gripper state for RMBench state stats.
+# Set to qpos only if the checkpoint was trained with 14-D joint state.
+state_source: endpose
+robot_key: rmbench
+camera_names:
+  - head_camera
+  - left_camera
+  - right_camera
+stop_on_success: true
+

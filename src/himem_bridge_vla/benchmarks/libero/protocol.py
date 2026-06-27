@@ -1,0 +1,21 @@
+from __future__ import annotations
+
+from .spec import LIBERO_SPEC
+
+
+LIBERO_BENCHMARK = LIBERO_SPEC.name
+LIBERO_VIEW_ORDER = LIBERO_SPEC.view_names
+LIBERO_STATE_DIM = LIBERO_SPEC.state_dim
+LIBERO_ACTION_DIM = LIBERO_SPEC.action_dim
+LIBERO_SHORT_MEMORY_OFFSETS = LIBERO_SPEC.short_memory_offsets
+LIBERO_REPLAN_STRIDE = LIBERO_SPEC.replan_stride
+
+
+__all__ = [
+    "LIBERO_ACTION_DIM",
+    "LIBERO_BENCHMARK",
+    "LIBERO_REPLAN_STRIDE",
+    "LIBERO_SHORT_MEMORY_OFFSETS",
+    "LIBERO_STATE_DIM",
+    "LIBERO_VIEW_ORDER",
+]

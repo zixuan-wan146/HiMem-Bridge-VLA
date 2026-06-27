@@ -1,0 +1,7 @@
+# /home/myser/Project/HiMem-Bridge-VLA/.codex/config.toml
+
+approval_policy = "never"
+sandbox_mode = "workspace-write"
+
+[sandbox_workspace_write]
+network_access = true

@@ -29,26 +29,26 @@ $AUTODL_TMP/libero/datasets/libero_10       10 demo files, about 13G
 当前已经具备：
 
 ```text
-scripts/build_libero_memory_replay_index.py
-evaluations/libero/libero_client_4tasks.py
-configs/libero_profiles/smoke.env
-configs/libero_profiles/full_eval.env
-scripts/setup_libero_env.sh
-scripts/run_libero_smoke.sh
-scripts/run_libero_eval.sh
-scripts/plan_libero_run.py
-scripts/report_libero_runs.py
+scripts/cache/build_libero_memory_replay_index.py
+evaluations/legacy/libero/libero_client_4tasks.py
+configs/runtime/libero_profiles/smoke.env
+configs/runtime/libero_profiles/full_eval.env
+scripts/setup/setup_libero_env.sh
+scripts/eval/run_libero_smoke.sh
+scripts/eval/run_libero_eval.sh
+scripts/eval/plan_libero_run.py
+scripts/report/report_libero_runs.py
 ```
 
 用途：
 
 - eval：可以用现有 websocket server + LIBERO client 跑 smoke/full eval。
 - memory 后续验证：LIBERO 是双视角单臂，memory compression 默认 `n_m=1`。
-- memory replay：可以用 `scripts/build_libero_memory_replay_index.py` 生成轻量 JSONL index，固定当前帧、短期历史帧、action chunk 范围和 mask。
-- frame replay：`himem_bridge_vla/dataset/memory_replay_frames.py` 可以根据 index row 回读当前图像、短期历史图像、state 和 future action chunk。
-- replay dataset：`himem_bridge_vla/dataset/memory_replay_dataset.py` 提供 PyTorch-compatible dataset 和 collate，输出当前图像、短期历史图像、state、future actions 和 mask。
-- replay token cache：`scripts/build_memory_replay_token_cache.py` 可以把 replay dataset 中的图像预先编码成按 view 分组的 visual tower tokens，并可选保存 current VLM hidden-state layers，写成 shard + manifest。最终 direct bridge 训练使用 InternVL3 + `--include-vlm-hidden-states --hidden-state-layers 3 6 9 12`；测试和 smoke 可使用 `image_stats` encoder。
-- token cache dataset：`himem_bridge_vla/dataset/memory_token_cache.py` 提供 `MemoryTokenCacheDataset` 和 `collate_memory_token_cache_samples`，可以从 shard 回读 current visual tokens、可选 current hidden states、short visual tokens、state、future actions、`short_steps`、`short_mask` 和 `action_mask`。
+- memory replay：可以用 `scripts/cache/build_libero_memory_replay_index.py` 生成轻量 JSONL index，固定当前帧、短期历史帧、action chunk 范围和 mask。
+- frame replay：`src/himem_bridge_vla/dataset/memory_replay_frames.py` 可以根据 index row 回读当前图像、短期历史图像、state 和 future action chunk。
+- replay dataset：`src/himem_bridge_vla/dataset/memory_replay_dataset.py` 提供 PyTorch-compatible dataset 和 collate，输出当前图像、短期历史图像、state、future actions 和 mask。
+- replay token cache：`scripts/cache/build_memory_replay_token_cache.py` 可以把 replay dataset 中的图像预先编码成按 view 分组的 visual tower tokens，并可选保存 current VLM hidden-state layers，写成 shard + manifest。最终 direct bridge 训练使用 InternVL3 + `--include-vlm-hidden-states --hidden-state-layers 3 6 9 12`；测试和 smoke 可使用 `image_stats` encoder。
+- token cache dataset：`src/himem_bridge_vla/dataset/memory_token_cache.py` 提供 `MemoryTokenCacheDataset` 和 `collate_memory_token_cache_samples`，可以从 shard 回读 current visual tokens、可选 current hidden states、short visual tokens、state、future actions、`short_steps`、`short_mask` 和 `action_mask`。
 
 缺口：
 
@@ -78,7 +78,7 @@ https://arxiv.org/abs/2510.13626
 
 截至 2026-06-23 的重新检索结果：arXiv 页面显示论文 v3 于 2025-12-26 修订，页面没有直接列出官方代码或数据仓库。当前仍不能把 LIBERO-Plus 当成已经可执行的本地 benchmark。
 
-需要注意：`LIBERO+`、`LIBERO-PRO`、`LIBERO-Para` 这类名称相近资源不能默认等价于这里的 LIBERO-Plus。`scripts/inspect_benchmarks.py` 现在会把 exact LIBERO-Plus root 和这些 name-similar candidates 分开报告；只有 exact root 存在时才认为 LIBERO-Plus 可用。
+需要注意：`LIBERO+`、`LIBERO-PRO`、`LIBERO-Para` 这类名称相近资源不能默认等价于这里的 LIBERO-Plus。`scripts/eval/inspect_benchmarks.py` 现在会把 exact LIBERO-Plus root 和这些 name-similar candidates 分开报告；只有 exact root 存在时才认为 LIBERO-Plus 可用。
 
 本机状态：
 
@@ -162,46 +162,46 @@ endpose/right_endpose      [T, 7]
 
 缺口：
 
-- 已实现轻量 RMBench HDF5 reader：`himem_bridge_vla/dataset/rmbench.py`。它不依赖官方仿真环境，只负责解码 encoded RGB bytes，读取多视角图像、14 维 joint action、双臂 endpose/gripper，并组合出 state vector。
-- 已实现 RMBench normalization stats builder：`scripts/build_rmbench_norm_stats.py`。它输出与现有 `NormalizationStats` 兼容的 `norm_stats.json`，metadata 单独输出，避免训练端把 metadata 误当成 robot key。
-- 已实现 RMBench memory replay index builder：`scripts/build_rmbench_memory_replay_index.py`。它按 low-level step 写出当前帧、短期 memory offset、action chunk 范围和 mask；当前只生成轻量 JSONL index，不缓存图像或 visual tokens。
-- frame replay：`himem_bridge_vla/dataset/memory_replay_frames.py` 可以根据 index row 回读三相机图像、state 和 14 维 future action chunk。
-- replay dataset：`himem_bridge_vla/dataset/memory_replay_dataset.py` 可复用同一套 index/frame reader，为后续 visual token cache 和数据检查提供稳定 batch 协议。
-- replay token cache：`scripts/build_memory_replay_token_cache.py` 可复用同一套 replay dataset 生成三相机 visual token shard，并可选保存 current VLM hidden-state layers。RMBench / 双臂默认后续 memory compression 使用 `n_m=2`，但 short memory token packing 不在 cache 阶段做 learned-query 压缩。
+- 已实现轻量 RMBench HDF5 reader：`src/himem_bridge_vla/dataset/rmbench.py`。它不依赖官方仿真环境，只负责解码 encoded RGB bytes，读取多视角图像、14 维 joint action、双臂 endpose/gripper，并组合出 state vector。
+- 已实现 RMBench normalization stats builder：`scripts/cache/build_rmbench_norm_stats.py`。它输出与现有 `NormalizationStats` 兼容的 `norm_stats.json`，metadata 单独输出，避免训练端把 metadata 误当成 robot key。
+- 已实现 RMBench memory replay index builder：`scripts/cache/build_rmbench_memory_replay_index.py`。它按 low-level step 写出当前帧、短期 memory offset、action chunk 范围和 mask；当前只生成轻量 JSONL index，不缓存图像或 visual tokens。
+- frame replay：`src/himem_bridge_vla/dataset/memory_replay_frames.py` 可以根据 index row 回读三相机图像、state 和 14 维 future action chunk。
+- replay dataset：`src/himem_bridge_vla/dataset/memory_replay_dataset.py` 可复用同一套 index/frame reader，为后续 visual token cache 和数据检查提供稳定 batch 协议。
+- replay token cache：`scripts/cache/build_memory_replay_token_cache.py` 可复用同一套 replay dataset 生成三相机 visual token shard，并可选保存 current VLM hidden-state layers。RMBench / 双臂默认后续 memory compression 使用 `n_m=2`，但 short memory token packing 不在 cache 阶段做 learned-query 压缩。
 - token cache dataset：`MemoryTokenCacheDataset` 可以读取 RMBench 三相机 token shard，并输出 `future_actions` 的 padded batch 和 `action_mask`。这一步只解决离线数据读取，不等价于训练脚本。
 - 需要定义我们模型的 action/state protocol：是否直接使用 14 维 joint action，还是映射到 per-arm 7 维动作。当前只记录该缺口，不实现训练或真实 eval。
-- 已实现 RMBench eval plan builder：`scripts/plan_rmbench_eval.py`。它读取本地 RMBench root，检查官方 `script/eval_policy.py` / `script/eval_policy_client.py` / `script/policy_model_server.py` / policy config / task env / data 目录，并生成 direct 或 socket 模式的评估命令。
+- 已实现 RMBench eval plan builder：`scripts/eval/plan_rmbench_eval.py`。它读取本地 RMBench root，检查官方 `script/eval_policy.py` / `script/eval_policy_client.py` / `script/policy_model_server.py` / policy config / task env / data 目录，并生成 direct 或 socket 模式的评估命令。
 - 官方 direct 模式入口是 `script/eval_policy.py`，会 import `policy/<policy_name>/deploy_policy.py` 中的 `get_model`、`eval`、`reset_model`。
 - 官方 socket 模式入口是 `script/policy_model_server.py` + `script/eval_policy_client.py`，server 侧持有模型，client 侧跑环境并通过 TCP 调用 `reset_model` / `get_action` / `update_obs`。
-- 已实现 RMBench policy adapter 源码：`evaluations/rmbench/policy/HiMemBridgeVLA/`。它把 RMBench observation 转成我们 server/protocol 需要的三相机图像、state、prompt、action mask，再把 32-step action chunk 转成 RMBench `qpos` action。
-- 已实现安装脚本：`scripts/install_rmbench_policy_adapter.py`。它会把 adapter 复制到官方 RMBench 仓库的 `policy/HiMemBridgeVLA/` 下，供 `script/eval_policy.py` import。
-- 已实现 RMBench eval run wrapper：`scripts/run_rmbench_eval.sh`。它会安装 adapter、写 run manifest、写 eval plan，然后逐任务调用官方 `script/eval_policy.py`。
-- 已实现 RMBench run manifest：`scripts/write_rmbench_run_manifest.py`，记录任务列表、server URI、action/state protocol、policy 名称和 git/environment metadata。
+- 已实现 legacy RMBench policy adapter 源码：`evaluations/legacy/rmbench/policy/HiMemBridgeVLA/`。它把 RMBench observation 转成我们 server/protocol 需要的三相机图像、state、prompt、action mask，再把 32-step action chunk 转成 RMBench `qpos` action。
+- 已实现安装脚本：`scripts/setup/install_rmbench_policy_adapter.py`。它会把 adapter 复制到官方 RMBench 仓库的 `policy/HiMemBridgeVLA/` 下，供 `script/eval_policy.py` import。
+- 已实现 RMBench eval run wrapper：`scripts/eval/run_rmbench_eval.sh`。它会安装 adapter、写 run manifest、写 eval plan，然后逐任务调用官方 `script/eval_policy.py`。
+- 已实现 RMBench run manifest：`scripts/report/write_rmbench_run_manifest.py`，记录任务列表、server URI、action/state protocol、policy 名称和 git/environment metadata。
 
 ## 4. 统一推进任务
 
 第一阶段只做可复现准备：
 
 ```text
-python scripts/inspect_benchmarks.py --data-root "$AUTODL_TMP" --output run_outputs/benchmark_inventory.json --allow-missing
-python scripts/build_libero_memory_replay_index.py --libero-root "$AUTODL_TMP/libero/datasets" --output run_outputs/libero_memory_replay.jsonl
-python scripts/build_rmbench_norm_stats.py --rmbench-root "$AUTODL_TMP/benchmarks/RMBench" --output run_outputs/rmbench_norm_stats.json --metadata-output run_outputs/rmbench_norm_stats.metadata.json
-python scripts/build_rmbench_memory_replay_index.py --rmbench-root "$AUTODL_TMP/benchmarks/RMBench" --output run_outputs/rmbench_memory_replay.jsonl
-python scripts/validate_bridge_himem_configs.py
+python scripts/eval/inspect_benchmarks.py --data-root "$AUTODL_TMP" --output run_outputs/benchmark_inventory.json --allow-missing
+python scripts/cache/build_libero_memory_replay_index.py --libero-root "$AUTODL_TMP/libero/datasets" --output run_outputs/libero_memory_replay.jsonl
+python scripts/cache/build_rmbench_norm_stats.py --rmbench-root "$AUTODL_TMP/benchmarks/RMBench" --output run_outputs/rmbench_norm_stats.json --metadata-output run_outputs/rmbench_norm_stats.metadata.json
+python scripts/cache/build_rmbench_memory_replay_index.py --rmbench-root "$AUTODL_TMP/benchmarks/RMBench" --output run_outputs/rmbench_memory_replay.jsonl
+python scripts/quality/validate_bridge_himem_configs.py
 python -m pytest -q
 ```
 
 第二阶段补数据 adapter：
 
 ```bash
-python scripts/build_memory_replay_token_cache.py \
+python scripts/cache/build_memory_replay_token_cache.py \
   --benchmark LIBERO \
   --data-root "$AUTODL_TMP/libero/datasets" \
   --index run_outputs/libero_memory_replay.jsonl \
   --output-root "$AUTODL_TMP/token_caches/libero_memory_replay" \
   --encoder internvl3
 
-python scripts/build_memory_replay_token_cache.py \
+python scripts/cache/build_memory_replay_token_cache.py \
   --benchmark RMBench \
   --data-root "$AUTODL_TMP/benchmarks/RMBench" \
   --index run_outputs/rmbench_memory_replay.jsonl \
@@ -233,7 +233,7 @@ LIBERO-Plus resource locator
 RMBench eval plan 命令：
 
 ```bash
-python scripts/plan_rmbench_eval.py \
+python scripts/eval/plan_rmbench_eval.py \
   --rmbench-root "$AUTODL_TMP/benchmarks/RMBench" \
   --output run_outputs/rmbench_eval_plan.md \
   --policy-name HiMemBridgeVLA \
@@ -248,7 +248,7 @@ python scripts/plan_rmbench_eval.py \
 安装 adapter：
 
 ```bash
-python scripts/install_rmbench_policy_adapter.py \
+python scripts/setup/install_rmbench_policy_adapter.py \
   --rmbench-root "$AUTODL_TMP/benchmarks/RMBench" \
   --force
 ```
@@ -260,7 +260,7 @@ HIMEM_RMBENCH_TASKS=press_button \
 HIMEM_RMBENCH_RUN_DIR=run_outputs/rmbench_smoke \
 HIMEM_RMBENCH_PLAN_ONLY=1 \
 HIMEM_SERVER_URI=ws://127.0.0.1:9000 \
-bash scripts/run_rmbench_eval.sh
+bash scripts/eval/run_rmbench_eval.sh
 ```
 
 其中 `HIMEM_RMBENCH_PLAN_ONLY=1` 表示 plan-only 检查模式：安装 adapter、写 manifest、写 eval plan。

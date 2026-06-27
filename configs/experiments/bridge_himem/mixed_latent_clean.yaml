@@ -1,0 +1,13 @@
+extends: ../../models/bridge_himem/base.yaml
+
+experiment_name: mixed_latent_clean
+
+bridge:
+  enabled: true
+  variant: mixed_latent
+
+context:
+  mode: bridge_clean
+
+memory:
+  enabled: true

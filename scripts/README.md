@@ -15,9 +15,8 @@ Scripts are grouped by responsibility. Prefer these entry points over hand-writt
 
 ## Training And Model Assets
 
-- `train_stage1.py`: active Stage1 trajectory-window token-cache training launcher. The implementation lives under `himem_bridge_vla/training/stage1/`; the script only starts the CLI.
-- `train.py`: legacy mixed training entry for historical paths. It does not own active Stage1 trajectory-window training.
-- `himem_server.py`: websocket inference server.
+- `train/stage1/libero.py`: active LIBERO Stage1 trajectory-window token-cache training launcher. The command delegates to `src/himem_bridge_vla/training/stage1/libero/` for LIBERO-specific config/contract and `src/himem_bridge_vla/training/stage1/common/` for the shared loop.
+- `serve/serve_policy.py`: active websocket inference server entry.
 - `download_libero_checkpoint.sh`: download the LIBERO checkpoint to the data disk.
 - `start_himem_server.sh`: start the HiMem-Bridge-VLA websocket server with checkpoint preflight.
 
@@ -38,34 +37,34 @@ Token caches are read with `MemoryTokenCacheDataset` and `collate_memory_token_c
 There are two different cache families:
 
 - `*_progress_vl_embedding_warmup_cache`: pooled VL embedding windows for progress-state planner warm-up.
-- `memory_replay_visual_token_cache`: replay-token shards for short memory and direct bridge-attn action-head training. Final direct bridge caches include `current_hidden_states`.
+- `memory_replay_visual_token_cache`: replay-token shards for short memory and direct bridge-attn action-head training. Final direct bridge caches include `current_hidden_states` and `planner_vl_summary`.
 
 Do not pass progress warm-up caches into the direct bridge token-cache smoke; the script validates the manifest format and will reject them.
 
-For active Stage1 direct bridge-attn training from cached replay tokens, use `scripts/train_stage1.py` or `python -m himem_bridge_vla.training.stage1.cli`. The Stage1 loader uses trajectory windows from `MemoryTokenCacheTrajectoryDataset`, not random frame-level batches, so the frozen progress planner state is advanced chronologically through burn-in and loss windows.
+For active Stage1 direct bridge-attn training from cached replay tokens, use `scripts/train/stage1/libero.py` or `python -m himem_bridge_vla.training.stage1.libero.cli`. The Stage1 loader uses trajectory windows from `MemoryTokenCacheTrajectoryDataset`, not random frame-level batches, so the frozen progress planner state is advanced chronologically through burn-in and loss windows.
 
 Example:
 
 ```bash
-python scripts/inspect_benchmarks.py \
+python scripts/eval/inspect_benchmarks.py \
   --data-root "$AUTODL_TMP" \
   --output run_outputs/benchmark_inventory.json \
   --allow-missing
 
-python scripts/build_libero_memory_replay_index.py \
+python scripts/cache/build_libero_memory_replay_index.py \
   --libero-root "$AUTODL_TMP/libero/datasets" \
   --output run_outputs/libero_memory_replay.jsonl
 
-python scripts/build_rmbench_norm_stats.py \
+python scripts/cache/build_rmbench_norm_stats.py \
   --rmbench-root "$AUTODL_TMP/benchmarks/RMBench" \
   --output run_outputs/rmbench_norm_stats.json \
   --metadata-output run_outputs/rmbench_norm_stats.metadata.json
 
-python scripts/build_rmbench_memory_replay_index.py \
+python scripts/cache/build_rmbench_memory_replay_index.py \
   --rmbench-root "$AUTODL_TMP/benchmarks/RMBench" \
   --output run_outputs/rmbench_memory_replay.jsonl
 
-python scripts/build_memory_replay_token_cache.py \
+python scripts/cache/build_memory_replay_token_cache.py \
   --benchmark LIBERO \
   --data-root "$AUTODL_TMP/libero/datasets" \
   --index run_outputs/libero_memory_replay.jsonl \
@@ -73,7 +72,7 @@ python scripts/build_memory_replay_token_cache.py \
   --encoder image_stats \
   --max-samples 2
 
-python scripts/build_memory_replay_token_cache.py \
+python scripts/cache/build_memory_replay_token_cache.py \
   --benchmark LIBERO \
   --data-root "$AUTODL_TMP/libero/datasets" \
   --index run_outputs/libero_memory_replay.jsonl \
@@ -84,7 +83,7 @@ python scripts/build_memory_replay_token_cache.py \
   --storage-dtype bfloat16 \
   --device cuda
 
-python scripts/build_memory_replay_token_cache.py \
+python scripts/cache/build_memory_replay_token_cache.py \
   --benchmark LIBERO \
   --data-root "$AUTODL_TMP/libero/datasets" \
   --index run_outputs/libero_memory_replay.jsonl \
@@ -98,14 +97,14 @@ python scripts/build_memory_replay_token_cache.py \
   --max-samples-per-shard 2 \
   --storage-dtype float32
 
-python scripts/smoke_direct_bridge_token_cache_training.py \
+python scripts/quality/smoke_direct_bridge_token_cache_training.py \
   --preset auto \
   --manifest "$AUTODL_TMP/token_caches/libero_memory_replay" \
   --device cpu \
   --steps 1 \
   --batch-size 1
 
-python scripts/smoke_direct_bridge_token_cache_training.py \
+python scripts/quality/smoke_direct_bridge_token_cache_training.py \
   --preset final \
   --manifest "$AUTODL_TMP/token_caches/libero_memory_replay_image_stats_hidden_smoke" \
   --device auto \
@@ -115,12 +114,12 @@ python scripts/smoke_direct_bridge_token_cache_training.py \
   --memory-entry-tokens 16 \
   --progress-planner-checkpoint "$AUTODL_TMP/runs/progress_warmup/libero_progress_state_planner_h32_r16_w4_bs12800_epval_v1/best.pt"
 
-python scripts/smoke_direct_bridge_inference.py \
+python scripts/quality/smoke_direct_bridge_inference.py \
   --preset final \
   --device auto \
   --progress-planner-checkpoint "$AUTODL_TMP/runs/progress_warmup/libero_progress_state_planner_h32_r16_w4_bs12800_epval_v1/best.pt"
 
-python scripts/plan_rmbench_eval.py \
+python scripts/eval/plan_rmbench_eval.py \
   --rmbench-root "$AUTODL_TMP/benchmarks/RMBench" \
   --output run_outputs/rmbench_eval_plan.md \
   --mode direct \
@@ -130,7 +129,7 @@ HIMEM_RMBENCH_TASKS=press_button \
 HIMEM_RMBENCH_RUN_DIR=run_outputs/rmbench_smoke \
 HIMEM_RMBENCH_PLAN_ONLY=1 \
 HIMEM_SERVER_URI=ws://127.0.0.1:9000 \
-bash scripts/run_rmbench_eval.sh
+bash scripts/eval/run_rmbench_eval.sh
 ```
 
 ## LIBERO Runs
@@ -140,7 +139,7 @@ bash scripts/run_rmbench_eval.sh
 - `run_libero_eval.sh`: full LIBERO evaluation.
 - `plan_libero_run.py`: generate reproducible server/eval/report commands before running.
 - `init_libero_experiment.py`: create a tracked experiment skeleton.
-- `libero_profile.sh`: safe parser for `configs/libero_profiles/*.env`.
+- `libero_profile.sh`: safe parser for `configs/runtime/libero_profiles/*.env`.
 
 ## Reporting
 

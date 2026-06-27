@@ -15,11 +15,10 @@ himem_bridge_vla/model/action_head/flow_matching.py direct bridge-attn flow-matc
 himem_bridge_vla/model/himem_bridge_vla.py 主模型入口；direct bridge 模式直接连接 VLM hidden states、short memory、plan slots 和 state
 himem_bridge_vla/dataset/libero_progress_warmup.py   LIBERO progress warm-up cache / dataset
 himem_bridge_vla/dataset/rmbench_progress_warmup.py  RMBench progress warm-up cache / dataset
-scripts/train_stage1.py                    active Stage1 训练入口
-scripts/train.py                           legacy mixed training entry, not the active Stage1 route
-scripts/himem_server.py                    websocket 推理服务
-evaluations/libero/                        LIBERO eval client 和结果统计
-evaluations/rmbench/                       RMBench policy adapter 和 eval plan helpers
+scripts/train/stage1/libero.py                    active LIBERO Stage1 训练入口
+scripts/serve/serve_policy.py                    websocket 推理服务
+evaluations/legacy/libero/                 legacy LIBERO eval client 和结果统计
+evaluations/legacy/rmbench/                legacy RMBench policy adapter 和 eval plan helpers
 ```
 
 当前 memory 分工：
@@ -36,19 +35,19 @@ long memory: planner-coupled recurrent task-progress state
 每次重要训练或评估前，先跑轻量检查：
 
 ```bash
-python scripts/validate_bridge_himem_configs.py
-python scripts/validate_training_configs.py
-python scripts/inspect_benchmarks.py --data-root "$AUTODL_TMP" --output run_outputs/benchmark_inventory.json --allow-missing
-python scripts/build_libero_memory_replay_index.py --libero-root "$AUTODL_TMP/libero/datasets" --output run_outputs/libero_memory_replay.jsonl
-python scripts/build_rmbench_norm_stats.py --rmbench-root "$AUTODL_TMP/benchmarks/RMBench" --output run_outputs/rmbench_norm_stats.json --metadata-output run_outputs/rmbench_norm_stats.metadata.json
-python scripts/build_rmbench_memory_replay_index.py --rmbench-root "$AUTODL_TMP/benchmarks/RMBench" --output run_outputs/rmbench_memory_replay.jsonl
-python scripts/build_memory_replay_token_cache.py --benchmark LIBERO --data-root "$AUTODL_TMP/libero/datasets" --index run_outputs/libero_memory_replay.jsonl --output-root "$AUTODL_TMP/token_caches/libero_memory_replay" --encoder image_stats --max-samples 2
-python scripts/build_memory_replay_token_cache.py --benchmark RMBench --data-root "$AUTODL_TMP/benchmarks/RMBench" --index run_outputs/rmbench_memory_replay.jsonl --output-root "$AUTODL_TMP/token_caches/rmbench_memory_replay" --encoder image_stats --max-samples 2
-python scripts/smoke_direct_bridge_inference.py --preset final
-python scripts/install_rmbench_policy_adapter.py --rmbench-root "$AUTODL_TMP/benchmarks/RMBench" --force
-python scripts/plan_rmbench_eval.py --rmbench-root "$AUTODL_TMP/benchmarks/RMBench" --output run_outputs/rmbench_eval_plan.md --mode direct --tasks observe_and_pickup press_button
-HIMEM_RMBENCH_DRY_RUN=1 bash scripts/run_rmbench_eval.sh
-HIMEM_RMBENCH_PLAN_ONLY=1 HIMEM_RMBENCH_TASKS=press_button bash scripts/run_rmbench_eval.sh
+python scripts/quality/validate_bridge_himem_configs.py
+python scripts/quality/validate_training_configs.py
+python scripts/eval/inspect_benchmarks.py --data-root "$AUTODL_TMP" --output run_outputs/benchmark_inventory.json --allow-missing
+python scripts/cache/build_libero_memory_replay_index.py --libero-root "$AUTODL_TMP/libero/datasets" --output run_outputs/libero_memory_replay.jsonl
+python scripts/cache/build_rmbench_norm_stats.py --rmbench-root "$AUTODL_TMP/benchmarks/RMBench" --output run_outputs/rmbench_norm_stats.json --metadata-output run_outputs/rmbench_norm_stats.metadata.json
+python scripts/cache/build_rmbench_memory_replay_index.py --rmbench-root "$AUTODL_TMP/benchmarks/RMBench" --output run_outputs/rmbench_memory_replay.jsonl
+python scripts/cache/build_memory_replay_token_cache.py --benchmark LIBERO --data-root "$AUTODL_TMP/libero/datasets" --index run_outputs/libero_memory_replay.jsonl --output-root "$AUTODL_TMP/token_caches/libero_memory_replay" --encoder image_stats --max-samples 2
+python scripts/cache/build_memory_replay_token_cache.py --benchmark RMBench --data-root "$AUTODL_TMP/benchmarks/RMBench" --index run_outputs/rmbench_memory_replay.jsonl --output-root "$AUTODL_TMP/token_caches/rmbench_memory_replay" --encoder image_stats --max-samples 2
+python scripts/quality/smoke_direct_bridge_inference.py --preset final
+python scripts/setup/install_rmbench_policy_adapter.py --rmbench-root "$AUTODL_TMP/benchmarks/RMBench" --force
+python scripts/eval/plan_rmbench_eval.py --rmbench-root "$AUTODL_TMP/benchmarks/RMBench" --output run_outputs/rmbench_eval_plan.md --mode direct --tasks observe_and_pickup press_button
+HIMEM_RMBENCH_DRY_RUN=1 bash scripts/eval/run_rmbench_eval.sh
+HIMEM_RMBENCH_PLAN_ONLY=1 HIMEM_RMBENCH_TASKS=press_button bash scripts/eval/run_rmbench_eval.sh
 ```
 
 上面两个 token cache 命令使用 `image_stats`，只用于检查数据读取、mask、shard 和 manifest 是否通。
@@ -56,7 +55,7 @@ HIMEM_RMBENCH_PLAN_ONLY=1 HIMEM_RMBENCH_TASKS=press_button bash scripts/run_rmbe
 构建最终 direct bridge 训练 cache 时，需要同时保存 current VLM hidden-state token layers：
 
 ```bash
-python scripts/build_memory_replay_token_cache.py \
+python scripts/cache/build_memory_replay_token_cache.py \
   --benchmark LIBERO \
   --data-root "$AUTODL_TMP/libero/datasets" \
   --index run_outputs/libero_memory_replay.jsonl \
@@ -99,7 +98,7 @@ direct bridge-attn 训练烟测可以直接使用 visual-token cache：
 ```text
 dataset_type: memory_token_cache
 dataset_config_path: $AUTODL_TMP/token_caches/libero_memory_replay/manifest.json
-bridge_himem_config: configs/bridge_himem/base.yaml
+bridge_himem_config: configs/models/bridge_himem/base.yaml
 horizon: 32
 ```
 
@@ -111,7 +110,7 @@ vlm_hidden_states        # optional, preferred for final direct bridge raw-layer
 memory_context
 memory_context_mask
 short_memory_time_ids
-planner_vl_summary       # optional, preferred when an exact progress-planner h_k is available
+planner_vl_summary       # required for active Stage1; VLM last-valid-token hidden state
 states
 actions
 action_mask
@@ -119,15 +118,13 @@ action_mask
 
 其中 short memory 每个历史时刻固定 pack 到 `memory_entry_tokens=16`，两个历史时刻合计 32 tokens。
 
-注意：最终 direct bridge 训练 cache 必须使用 `--encoder internvl3 --include-vlm-hidden-states --hidden-state-layers 3 6 9 12`。这会同时缓存 InternVL3 visual-tower tokens 和 selected language/VLM hidden-state token layers。`current_tokens_by_view` 供 short memory 与 IO 检查使用；`current_hidden_states` 会在 collate 后变成 `vlm_hidden_states`，并由 `scripts/train_stage1.py` 传给 direct bridge action head。只包含 `current_tokens_by_view` 的 cache 仅用于 smoke 或降级调试，不作为最终训练输入。
+注意：最终 direct bridge 训练 cache 必须使用 `--encoder internvl3 --include-vlm-hidden-states --hidden-state-layers 3 6 9 12`。这会同时缓存 InternVL3 visual-tower tokens、selected language/VLM hidden-state token layers，以及 `planner_vl_summary`。`current_tokens_by_view` 供 short memory 与 IO 检查使用；`current_hidden_states` 会在 collate 后变成 `vlm_hidden_states`，并由 `scripts/train/stage1/libero.py` 传给 direct bridge action head。`planner_vl_summary` 会直接喂给冻结的 progress planner。只包含 `current_tokens_by_view` 的 cache 仅用于 smoke 或降级调试，不作为最终训练输入。
 
 Stage1 action-side policy 训练必须走 trajectory-window cache 入口：
 
 ```bash
-"$AUTODL_TMP/miniforge3/envs/Evo1/bin/python" -m accelerate.commands.launch \
-  --deepspeed_config_file configs/deepspeed/ds_config.json \
-  scripts/train_stage1.py \
-  --config configs/stage1/libero_10_direct_progress_w4.yaml
+"$AUTODL_TMP/miniforge3/envs/Evo1/bin/python" scripts/train/stage1/libero.py \
+  --config configs/training/stage1/libero/libero_10_direct_progress_w4.yaml
 ```
 
 该入口会拒绝 frame-level random batch，因为 frozen W4 ProgressPlanner 内部维护递推 long memory：
@@ -150,12 +147,12 @@ direct bridge / short memory:
   content = current visual tokens, optional current VLM hidden states, short visual tokens, state, future actions
 ```
 
-`scripts/smoke_direct_bridge_token_cache_training.py --manifest` 只接受 `memory_replay_visual_token_cache`。已有的 LIBERO/RMBench progress warm-up cache 不能作为 direct bridge visual-token cache 使用。
+`scripts/quality/smoke_direct_bridge_token_cache_training.py --manifest` 只接受 `memory_replay_visual_token_cache`。已有的 LIBERO/RMBench progress warm-up cache 不能作为 direct bridge visual-token cache 使用。
 
 visual-token cache 训练烟测：
 
 ```bash
-"$AUTODL_TMP/miniforge3/envs/Evo1/bin/python" scripts/smoke_direct_bridge_token_cache_training.py \
+"$AUTODL_TMP/miniforge3/envs/Evo1/bin/python" scripts/quality/smoke_direct_bridge_token_cache_training.py \
   --preset auto \
   --manifest "$AUTODL_TMP/token_caches/libero_memory_replay" \
   --device cpu \
@@ -166,7 +163,7 @@ visual-token cache 训练烟测：
 带 progress-state planner checkpoint 的 direct bridge 训练烟测：
 
 ```bash
-python scripts/build_memory_replay_token_cache.py \
+python scripts/cache/build_memory_replay_token_cache.py \
   --benchmark LIBERO \
   --data-root "$AUTODL_TMP/libero/datasets" \
   --index run_outputs/libero_memory_replay.jsonl \
@@ -180,7 +177,7 @@ python scripts/build_memory_replay_token_cache.py \
   --max-samples-per-shard 2 \
   --storage-dtype float32
 
-"$AUTODL_TMP/miniforge3/envs/Evo1/bin/python" scripts/smoke_direct_bridge_token_cache_training.py \
+"$AUTODL_TMP/miniforge3/envs/Evo1/bin/python" scripts/quality/smoke_direct_bridge_token_cache_training.py \
   --preset final \
   --manifest "$AUTODL_TMP/token_caches/libero_memory_replay_image_stats_hidden_smoke" \
   --device auto \
@@ -210,7 +207,7 @@ actions
 direct bridge 推理烟测可以加载 progress-state planner warm-up checkpoint，让 checkpoint 生成真实 plan token，再进入 direct bridge action head：
 
 ```bash
-"$AUTODL_TMP/miniforge3/envs/Evo1/bin/python" scripts/smoke_direct_bridge_inference.py \
+"$AUTODL_TMP/miniforge3/envs/Evo1/bin/python" scripts/quality/smoke_direct_bridge_inference.py \
   --preset final \
   --device auto \
   --progress-planner-checkpoint "$AUTODL_TMP/runs/progress_warmup/libero_progress_state_planner_h32_r16_w4_bs12800_epval_v1/best.pt"
@@ -230,16 +227,16 @@ action_mask keeps masked dimensions fixed at zero
 完整仓库检查：
 
 ```bash
-PYTHON="$AUTODL_TMP/miniforge3/envs/Evo1/bin/python" scripts/check_repo.sh
+PYTHON="$AUTODL_TMP/miniforge3/envs/Evo1/bin/python" scripts/quality/check_repo.sh
 ```
 
 如果只做代码级验证：
 
 ```bash
 "$AUTODL_TMP/miniforge3/envs/Evo1/bin/python" -m pytest -q
-"$AUTODL_TMP/miniforge3/envs/Evo1/bin/python" scripts/smoke_direct_bridge_inference.py --preset final
-"$AUTODL_TMP/miniforge3/envs/Evo1/bin/python" scripts/smoke_direct_bridge_token_cache_training.py --preset final --manifest "$AUTODL_TMP/token_caches/libero_memory_replay_image_stats_hidden_smoke" --device auto --steps 1 --batch-size 1 --action-horizon 32 --memory-entry-tokens 16 --progress-planner-checkpoint "$AUTODL_TMP/runs/progress_warmup/libero_progress_state_planner_h32_r16_w4_bs12800_epval_v1/best.pt"
-"$AUTODL_TMP/miniforge3/envs/Evo1/bin/python" scripts/smoke_direct_bridge_inference.py --preset final --progress-planner-checkpoint "$AUTODL_TMP/runs/progress_warmup/libero_progress_state_planner_h32_r16_w4_bs12800_epval_v1/best.pt"
+"$AUTODL_TMP/miniforge3/envs/Evo1/bin/python" scripts/quality/smoke_direct_bridge_inference.py --preset final
+"$AUTODL_TMP/miniforge3/envs/Evo1/bin/python" scripts/quality/smoke_direct_bridge_token_cache_training.py --preset final --manifest "$AUTODL_TMP/token_caches/libero_memory_replay_image_stats_hidden_smoke" --device auto --steps 1 --batch-size 1 --action-horizon 32 --memory-entry-tokens 16 --progress-planner-checkpoint "$AUTODL_TMP/runs/progress_warmup/libero_progress_state_planner_h32_r16_w4_bs12800_epval_v1/best.pt"
+"$AUTODL_TMP/miniforge3/envs/Evo1/bin/python" scripts/quality/smoke_direct_bridge_inference.py --preset final --progress-planner-checkpoint "$AUTODL_TMP/runs/progress_warmup/libero_progress_state_planner_h32_r16_w4_bs12800_epval_v1/best.pt"
 git diff --check
 ```
 
@@ -290,7 +287,7 @@ LIBERO 和 RMBench 的 action protocol 不同，progress warm-up cache 分开构
 LIBERO H32/R16 cache：
 
 ```bash
-"$AUTODL_TMP/miniforge3/envs/Evo1/bin/python" scripts/build_libero_progress_vl_embedding_cache.py \
+"$AUTODL_TMP/miniforge3/envs/Evo1/bin/python" scripts/cache/build_libero_progress_vl_embedding_cache.py \
   --index run_outputs/libero_memory_replay.jsonl \
   --output-root "$AUTODL_TMP/token_caches/libero_progress_vl_embedding_h32_r16_w4" \
   --horizon 32 \
@@ -304,7 +301,7 @@ LIBERO H32/R16 cache：
 已有 LIBERO step cache 重新切 window 时使用：
 
 ```bash
-"$AUTODL_TMP/miniforge3/envs/Evo1/bin/python" scripts/rewindow_progress_warmup_cache.py \
+"$AUTODL_TMP/miniforge3/envs/Evo1/bin/python" scripts/cache/rewindow_progress_warmup_cache.py \
   --source-cache "$AUTODL_TMP/token_caches/libero_progress_vl_embedding_h32_r16_w8" \
   --output-root "$AUTODL_TMP/token_caches/libero_progress_vl_embedding_h32_r16_w4" \
   --loss-replan-steps 4
@@ -313,7 +310,7 @@ LIBERO H32/R16 cache：
 RMBench 14-dim action intent AE：
 
 ```bash
-"$AUTODL_TMP/miniforge3/envs/Evo1/bin/python" scripts/train_rmbench_action_segment_autoencoder.py \
+"$AUTODL_TMP/miniforge3/envs/Evo1/bin/python" scripts/train/train_rmbench_action_segment_autoencoder.py \
   --rmbench-root "$AUTODL_TMP/benchmarks/RMBench" \
   --index run_outputs/rmbench_memory_replay.jsonl \
   --norm-stats run_outputs/rmbench_norm_stats.json \
@@ -328,7 +325,7 @@ RMBench 14-dim action intent AE：
 RMBench H32/R16 cache：
 
 ```bash
-"$AUTODL_TMP/miniforge3/envs/Evo1/bin/python" scripts/build_rmbench_progress_vl_embedding_cache.py \
+"$AUTODL_TMP/miniforge3/envs/Evo1/bin/python" scripts/cache/build_rmbench_progress_vl_embedding_cache.py \
   --rmbench-root "$AUTODL_TMP/benchmarks/RMBench" \
   --index run_outputs/rmbench_memory_replay.jsonl \
   --output-root "$AUTODL_TMP/token_caches/rmbench_progress_vl_embedding_h32_r16_w4" \
@@ -346,7 +343,7 @@ RMBench H32/R16 cache：
 Progress-state planner warm-up：
 
 ```bash
-"$AUTODL_TMP/miniforge3/envs/Evo1/bin/python" scripts/train_progress_state_planner.py \
+"$AUTODL_TMP/miniforge3/envs/Evo1/bin/python" scripts/train/train_progress_state_planner.py \
   --cache-manifest "$AUTODL_TMP/token_caches/libero_progress_vl_embedding_h32_r16_w4" \
   --output-dir "$AUTODL_TMP/runs/progress_warmup/libero_progress_state_planner_h32_r16_w4_bs12800_epval_v1" \
   --device cuda \

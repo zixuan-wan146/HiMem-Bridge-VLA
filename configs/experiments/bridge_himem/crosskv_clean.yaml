@@ -1,0 +1,13 @@
+extends: ../../models/bridge_himem/base.yaml
+
+experiment_name: crosskv_clean
+
+bridge:
+  enabled: true
+  variant: crosskv
+
+context:
+  mode: bridge_clean
+
+memory:
+  enabled: true

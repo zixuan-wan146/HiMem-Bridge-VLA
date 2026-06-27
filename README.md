@@ -61,10 +61,9 @@ scripts/README.md                             Script entry points
 ## Project Layout
 
 ```text
-himem_bridge_vla/   package code: configs, dataset loaders, model modules, runtime helpers
-configs/            checked-in Bridge-HiMem, dataset, DeepSpeed, LIBERO profile configs
-evaluations/libero/ LIBERO client, action protocol, result handling
-evaluations/rmbench/ RMBench adapter and eval-planning helpers
+src/himem_bridge_vla/ package code: core contracts, dataset loaders, model modules, runtime, benchmarks
+configs/            checked-in Bridge-HiMem, dataset, LIBERO profile configs
+evaluations/legacy/ legacy LIBERO/RMBench compatibility code and official policy adapters
 scripts/            training, server, checks, LIBERO/RMBench tooling
 tests/              lightweight tests that avoid downloading model weights
 referen-repo/       historical tracked reference repositories; kept in place to avoid churn
@@ -94,9 +93,9 @@ export HF_ENDPOINT=https://hf-mirror.com
 Lightweight checks:
 
 ```bash
-python scripts/validate_bridge_himem_configs.py
-python scripts/validate_training_configs.py
-scripts/check_repo.sh
+python scripts/quality/validate_bridge_himem_configs.py
+python scripts/quality/validate_training_configs.py
+scripts/quality/check_repo.sh
 ```
 
 ## Server And LIBERO
@@ -104,7 +103,7 @@ scripts/check_repo.sh
 Start the model server from a trained checkpoint:
 
 ```bash
-python scripts/himem_server.py --ckpt_dir checkpoints/HiMem_LIBERO --port 9000
+python scripts/serve/serve_policy.py --ckpt_dir checkpoints/HiMem_LIBERO --port 9000
 ```
 
 The active server schema does not accept `transition_frame`; transition-trigger runtime integration has been removed from the active path.
@@ -112,6 +111,6 @@ The active server schema does not accept `transition_frame`; transition-trigger 
 LIBERO setup and smoke run:
 
 ```bash
-HIMEM_DATA_ROOT=run_outputs/libero_data CONDA_BIN=miniconda3/bin/conda scripts/setup_libero_env.sh
-HIMEM_LIBERO_PROFILE=configs/libero_profiles/smoke.env HIMEM_LIBERO_RUN_DIR=run_outputs/himem_runs/libero_smoke_001 LIBERO_PYTHON=run_outputs/libero_data/envs/libero/bin/python scripts/run_libero_smoke.sh
+HIMEM_DATA_ROOT=run_outputs/libero_data CONDA_BIN=miniconda3/bin/conda scripts/setup/setup_libero_env.sh
+HIMEM_LIBERO_PROFILE=configs/runtime/libero_profiles/smoke.env HIMEM_LIBERO_RUN_DIR=run_outputs/himem_runs/libero_smoke_001 LIBERO_PYTHON=run_outputs/libero_data/envs/libero/bin/python scripts/eval/run_libero_smoke.sh
 ```

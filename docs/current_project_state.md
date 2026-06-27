@@ -22,7 +22,7 @@ M_k = ProgressStateUpdater(M_{k-1}, x_k)
 P_k = Planner(M_k, h_k, s_k)
 ```
 
-`h_k` is the progress planner VL summary. Warm-up caches store it directly as `vl_summary`. Direct bridge policy training may pass it through `planner_vl_summary`; if the batch only has token features, the model falls back to deterministic token mean pooling.
+`h_k` is the progress planner VL summary. Warm-up caches store it directly as `vl_summary`. Active direct bridge Stage1 token caches must store the same value as `planner_vl_summary`; if a non-Stage1 smoke batch only has token features, the model falls back to deterministic token mean pooling.
 
 Current warm-up weights use one planner token, and the action head expands that token into plan slots:
 

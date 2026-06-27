@@ -1,10 +1,6 @@
-# Top-level packages for the LIBERO evaluation environment.
-# This environment is intentionally separate from the root requirements.txt package/runtime env.
-# Tested server setup used Python 3.8.13.
-libero==0.1.1
-robosuite==1.4.0
-robomimic==0.2.0
-mujoco==3.2.3
-websockets==12.0
-imageio==2.34.2
-huggingface_hub==0.23.4
+libero==0.1.0
+robosuite==1.4.1
+mujoco==3.1.6
+imageio==2.37.0
+huggingface_hub==0.36.0
+websockets==16.0

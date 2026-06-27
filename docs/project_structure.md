@@ -6,14 +6,13 @@
 
 ```text
 configs/
-  bridge_himem/            Bridge-HiMem 共享默认值和实验 overlay
+  models/bridge_himem/     Bridge-HiMem 共享默认值
+  experiments/bridge_himem/ Bridge-HiMem 实验 overlay
   datasets/                训练数据配置
-  deepspeed/               DeepSpeed 配置
-  libero_profiles/         LIBERO smoke/full-eval 环境 profile
+  runtime/libero_profiles/ LIBERO smoke/full-eval 环境 profile
 
-himem_bridge_vla/          package code: config、dataset、model、runtime helpers
-evaluations/libero/        LIBERO client、action 协议、result summary
-evaluations/rmbench/       RMBench policy adapter 和 eval plan helpers
+src/himem_bridge_vla/      package code: core、config、dataset、model、runtime、benchmark helpers
+evaluations/legacy/        legacy LIBERO/RMBench 兼容代码和官方 policy adapter
 scripts/                  train/server/repo gate、preflight、下载、评估编排、报告工具
 tests/                    轻量单测，不下载模型权重
 docs/                     当前设计说明和工程约定
@@ -52,20 +51,23 @@ scripts/README.md
 
 ## 配置规则
 
-- 新 Bridge-HiMem 实验只改 `configs/bridge_himem/experiments/*.yaml`，不要在模型里写死实验参数。
-- 共享默认值只改 `configs/bridge_himem/base.yaml`。
+- 新 Bridge-HiMem 实验只改 `configs/experiments/bridge_himem/*.yaml`，不要在模型里写死实验参数。
+- 共享默认值只改 `configs/models/bridge_himem/base.yaml`。
 - Progress-state planner 配置应使用清晰的 experiment 名称，避免复用历史实验语义。
-- 修改 YAML 后先跑 `python scripts/validate_bridge_himem_configs.py`。
+- 修改 YAML 后先跑 `python scripts/quality/validate_bridge_himem_configs.py`。
 
 ## 分工边界
 
-- `bridge_himem_config.py`：配置 schema、继承、校验、兼容旧字段。
-- `experiment_config.py`：训练/模型共用 config 解析。
-- `model/bridge`：legacy bridge modules 和 bridge token 生成。
-- `model/himem`：short visual-token memory 相关结构；旧 long visual FIFO 不再作为主线。
-- `model/planner`：progress-state planner、progress state updater、condition builder，以及 action segment autoencoder。
-- `model/himem_bridge_vla.py`：主模型入口；direct bridge 模式连接 VLM hidden states、short memory、progress planner plan token、state 和 flow-matching action head。
-- `dataset/action_segments.py`：future action segment 切分和 segment mask。
-- `scripts/himem_server.py`：模型服务和 server protocol；当前路径不加载 transition trigger。
-- `himem_bridge_vla/training/stage1/`：active LIBERO Stage1 trajectory-window token-cache 训练逻辑。
-- `scripts/train_stage1.py`：active Stage1 训练入口；旧 `scripts/train.py` 是混合历史入口，不作为当前主线。
+- `src/himem_bridge_vla/core/`：全项目共享 contract、常量、错误、路径工具。
+- `src/himem_bridge_vla/bridge_himem_config.py`：配置 schema、继承、校验、兼容旧字段。
+- `src/himem_bridge_vla/experiment_config.py`：训练/模型共用 config 解析。
+- `src/himem_bridge_vla/model/bridge`：legacy bridge modules 和 bridge token 生成。
+- `src/himem_bridge_vla/model/himem`：short visual-token memory 相关结构；旧 long visual FIFO 不再作为主线。
+- `src/himem_bridge_vla/model/planner`：progress-state planner、progress state updater、condition builder，以及 action segment autoencoder。
+- `src/himem_bridge_vla/model/himem_bridge_vla.py`：主模型入口；direct bridge 模式连接 VLM hidden states、short memory、progress planner plan token、state 和 flow-matching action head。
+- `src/himem_bridge_vla/dataset/action_segments.py`：future action segment 切分和 segment mask。
+- `src/himem_bridge_vla/runtime/`：benchmark-neutral runtime contract、feature extraction、memory builder、inference engine、websocket server。
+- `src/himem_bridge_vla/benchmarks/`：LIBERO/RMBench obs、state、action、history、runner 和 adapter 逻辑。
+- `scripts/serve/serve_policy.py`：当前 websocket 推理服务入口。
+- `src/himem_bridge_vla/training/stage1/`：active LIBERO Stage1 trajectory-window token-cache 训练逻辑。
+- `scripts/train/stage1/libero.py`：active LIBERO Stage1 训练入口。

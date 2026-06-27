@@ -34,16 +34,16 @@ RGB views + prompt
 Bridge-HiMem experiment files live under:
 
 ```text
-configs/bridge_himem/base.yaml
-configs/bridge_himem/experiments/*.yaml
+configs/models/bridge_himem/base.yaml
+configs/experiments/bridge_himem/*.yaml
 ```
 
-New experiment knobs should go through YAML and `himem_bridge_vla/bridge_himem_config.py`. Do not hard-code experiment behavior in model or training scripts.
+New experiment knobs should go through YAML and `src/himem_bridge_vla/bridge_himem_config.py`. Do not hard-code experiment behavior in model or training scripts.
 
 Validate configs before training:
 
 ```bash
-python scripts/validate_bridge_himem_configs.py
+python scripts/quality/validate_bridge_himem_configs.py
 ```
 
 ## VL Inputs
