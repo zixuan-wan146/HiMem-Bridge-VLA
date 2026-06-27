@@ -219,6 +219,8 @@ class FlowmatchingActionHead(nn.Module):
                 num_layers=num_layers,
                 dropout=dropout,
                 num_inference_timesteps=num_inference_timesteps,
+                inference_tau_schedule="midpoint",
+                avoid_endpoint_tau=True,
                 num_categories=num_categories,
             )
 
@@ -236,7 +238,13 @@ class FlowmatchingActionHead(nn.Module):
         self.num_layers = num_layers
         self.num_plan_slots = int(getattr(self.config, "num_plan_slots", 8))
         self.plan_gate_lambda = float(getattr(self.config, "plan_gate_lambda", 0.25))
+        self.inference_tau_schedule = str(getattr(self.config, "inference_tau_schedule", "midpoint")).lower()
+        self.avoid_endpoint_tau = bool(getattr(self.config, "avoid_endpoint_tau", True))
         self.max_vlm_tokens = getattr(self.config, "max_vlm_tokens", None)
+        if self.inference_tau_schedule != "midpoint":
+            raise ValueError("FlowmatchingActionHead currently supports only midpoint inference_tau_schedule")
+        if not self.avoid_endpoint_tau:
+            raise ValueError("FlowmatchingActionHead requires avoid_endpoint_tau=True for midpoint inference")
 
         self.time_pos_enc = SinusoidalPositionalEncoding(embed_dim, max_len=1000)
         self.action_encoder = MultiEmbodimentActionEncoder(
@@ -400,7 +408,7 @@ class FlowmatchingActionHead(nn.Module):
         num_steps = int(getattr(self.config, "num_inference_timesteps", 15))
         dt = 1.0 / num_steps
         for i in range(num_steps):
-            t = torch.full((batch_size,), i / num_steps, device=device, dtype=fused_tokens.dtype)
+            t = torch.full((batch_size,), (i + 0.5) / num_steps, device=device, dtype=fused_tokens.dtype)
             time_emb = self._time_embedding(t, device=device, dtype=fused_tokens.dtype)
             pred = self._predict_velocity(
                 action_seq,

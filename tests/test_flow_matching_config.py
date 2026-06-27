@@ -110,6 +110,37 @@ class FlowMatchingConfigTests(unittest.TestCase):
 
         self.assertTrue(torch.equal(action[:, :, 1], torch.zeros_like(action[:, :, 1])))
 
+    def test_inference_uses_midpoint_tau_grid(self):
+        torch = self._import_or_skip("torch")
+        flow_matching = self._import_or_skip("himem_bridge_vla.model.action_head.flow_matching")
+
+        head = flow_matching.FlowmatchingActionHead(
+            embed_dim=8,
+            hidden_dim=16,
+            action_dim=3,
+            horizon=1,
+            per_action_dim=3,
+            num_heads=2,
+            num_layers=1,
+            num_inference_timesteps=2,
+        )
+        observed = []
+        original_time_embedding = head._time_embedding
+
+        def capture_time_embedding(t, *, device, dtype):
+            observed.append(t.detach().cpu())
+            return original_time_embedding(t, device=device, dtype=dtype)
+
+        head._time_embedding = capture_time_embedding
+        fused_tokens = torch.zeros(1, 1, 8)
+        action_mask = torch.ones(1, 3)
+
+        head.get_action(fused_tokens, action_mask=action_mask)
+
+        self.assertEqual(len(observed), 2)
+        self.assertTrue(torch.allclose(observed[0], torch.tensor([0.25])))
+        self.assertTrue(torch.allclose(observed[1], torch.tensor([0.75])))
+
     def test_action_head_training_shapes_for_common_horizons(self):
         torch = self._import_or_skip("torch")
         flow_matching = self._import_or_skip("himem_bridge_vla.model.action_head.flow_matching")

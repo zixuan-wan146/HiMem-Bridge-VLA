@@ -31,12 +31,15 @@ class HiMemBridgeVLA(nn.Module):
         self._device = config.get("device", "cuda")
         self.return_cls_only = config.get("return_cls_only", False)
 
-        vlm_name = config.get("vlm_name", "OpenGVLab/InternVL3-1B")
-        self.embedder = InternVL3Embedder(
-            model_name=vlm_name,
-            device=self._device,
-            allow_image_token_truncation=bool(config.get("allow_image_token_truncation", False)),
-        )
+        self.load_vlm = bool(config.get("load_vlm", True))
+        self.embedder = None
+        if self.load_vlm:
+            vlm_name = config.get("vlm_name", "OpenGVLab/InternVL3-1B")
+            self.embedder = InternVL3Embedder(
+                model_name=vlm_name,
+                device=self._device,
+                allow_image_token_truncation=bool(config.get("allow_image_token_truncation", False)),
+            )
 
         action_head_type = config.get("action_head", "flowmatching").lower()
         if action_head_type != "flowmatching":
@@ -72,6 +75,8 @@ class HiMemBridgeVLA(nn.Module):
             num_layers=config.get("num_layers", 8),
             dropout=config.get("dropout", 0.0),
             num_inference_timesteps=config.get("num_inference_timesteps", 15),
+            inference_tau_schedule=config.get("inference_tau_schedule", "midpoint"),
+            avoid_endpoint_tau=config.get("avoid_endpoint_tau", True),
             num_categories=config.get("num_categories", 1),
             num_plan_slots=config.get("num_plan_slots", 8),
             visual_gate_lambda=config.get("visual_gate_lambda", 0.5),
@@ -164,6 +169,8 @@ class HiMemBridgeVLA(nn.Module):
         return_cls_only: Union[bool, None] = None,
         return_hidden_states: bool = False,
     ) -> torch.Tensor | InternVL3EmbeddingOutput:
+        if self.embedder is None:
+            raise RuntimeError("VLM embedder is not loaded; set load_vlm=true for image-based training or inference")
         if return_cls_only is None:
             return_cls_only = self.return_cls_only
 
@@ -603,7 +610,11 @@ class HiMemBridgeVLA(nn.Module):
             param.requires_grad = False
 
     def set_finetune_flags(self):
-        if not self.config.get("finetune_vlm", False):
+        if self.embedder is None:
+            if self.config.get("finetune_vlm", False):
+                raise ValueError("finetune_vlm=true requires load_vlm=true")
+            logging.info("Skipping VLM freeze because load_vlm=false")
+        elif not self.config.get("finetune_vlm", False):
             self._freeze_module(self.embedder, "VLM (InternVL3)")
         else:
             logging.info("Finetuning VLM (InternVL3)...")

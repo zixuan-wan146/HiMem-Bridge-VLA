@@ -74,7 +74,9 @@ def load_model_and_normalizer(
     with open(stats_path, "r") as f:
         stats = json.load(f)
 
+    checkpoint_load_vlm = bool(config.get("load_vlm", True))
     config["device"] = str(device)
+    config["load_vlm"] = True
     config["finetune_vlm"] = False
     config["finetune_action_head"] = False
     config["num_inference_timesteps"] = inference_steps
@@ -85,13 +87,79 @@ def load_model_and_normalizer(
         allow_unsafe_checkpoint_load=allow_unsafe_checkpoint_load,
     )
     state_dict = checkpoint["module"] if "module" in checkpoint else checkpoint
-    model.load_state_dict(state_dict, strict=True)
+    load_result = model.load_state_dict(state_dict, strict=checkpoint_load_vlm)
+    if not checkpoint_load_vlm:
+        bad_missing = [key for key in load_result.missing_keys if not key.startswith("embedder.")]
+        if bad_missing or load_result.unexpected_keys:
+            raise RuntimeError(
+                "Unexpected non-VLM checkpoint mismatch while loading token-cache checkpoint: "
+                f"missing={bad_missing[:20]}, unexpected={load_result.unexpected_keys[:20]}"
+            )
+        logging.info(
+            "Loaded token-cache checkpoint action-side weights with VLM initialized from base model "
+            "(ignored %d missing embedder keys).",
+            len(load_result.missing_keys),
+        )
     model = model.to(device)
 
     normalizer_dim = checkpoint_normalizer_dim(config)
     normalizer = NormalizationStats(stats, target_dim=normalizer_dim)
     logging.info("Loaded normalization stats robot_keys=%s default_robot_key=%s", normalizer.robot_keys, normalizer.robot_key)
     return model, normalizer
+
+
+class RuntimePolicyState:
+    def __init__(self) -> None:
+        self.executed_actions: torch.Tensor | None = None
+        self.executed_action_mask: torch.Tensor | None = None
+
+    def reset(self, model: HiMemBridgeVLA) -> None:
+        self.executed_actions = None
+        self.executed_action_mask = None
+        model.reset_progress_state()
+
+    def progress_inputs(
+        self,
+        model: HiMemBridgeVLA,
+        *,
+        device: torch.device,
+        dtype: torch.dtype,
+    ) -> tuple[torch.Tensor | None, torch.Tensor | None]:
+        planner = model.progress_state_planner
+        if planner is None:
+            return None, None
+
+        stride = int(planner.config.replan_stride)
+        action_dim = int(planner.config.action_dim)
+        if self.executed_actions is None:
+            actions = torch.zeros(1, stride, action_dim, device=device, dtype=dtype)
+            mask = torch.zeros(1, stride, device=device, dtype=torch.bool)
+            return actions, mask
+
+        return (
+            self.executed_actions.to(device=device, dtype=dtype),
+            self.executed_action_mask.to(device=device) if self.executed_action_mask is not None else None,
+        )
+
+    def store_executed_actions(self, model: HiMemBridgeVLA, normalized_action: torch.Tensor) -> None:
+        planner = model.progress_state_planner
+        if planner is None:
+            return
+
+        stride = int(planner.config.replan_stride)
+        action_dim = int(planner.config.action_dim)
+        action = normalized_action[:, :stride, :action_dim].detach()
+        if action.shape[1] != stride:
+            pad = torch.zeros(
+                action.shape[0],
+                stride - action.shape[1],
+                action_dim,
+                device=action.device,
+                dtype=action.dtype,
+            )
+            action = torch.cat([action, pad], dim=1)
+        self.executed_actions = action.cpu()
+        self.executed_action_mask = torch.ones(action.shape[:2], dtype=torch.bool)
 
 
 def decode_image_from_list(img_list, device) -> torch.Tensor:
@@ -110,7 +178,7 @@ def pad_state_tensor(state: torch.Tensor, target_dim: int = TARGET_STATE_DIM) ->
     return state
 
 
-def infer_from_json_dict(data: dict, model, normalizer):
+def infer_from_json_dict(data: dict, model, normalizer, runtime_state: RuntimePolicyState | None = None):
     device = next(model.parameters()).device
     model_state_dim = int(model.config.get("state_dim", TARGET_STATE_DIM))
     model_action_dim = int(getattr(model, "per_action_dim", model.config.get("per_action_dim", TARGET_STATE_DIM)))
@@ -120,6 +188,9 @@ def infer_from_json_dict(data: dict, model, normalizer):
         target_action_dim=model_action_dim,
         max_action_mask_dim=TARGET_STATE_DIM,
     )
+    if runtime_state is not None and bool(data.get("reset_memory", False)):
+        runtime_state.reset(model)
+
     images = [decode_image_from_list(img, device) for img in request["image"]]
     for img in images:
         expected_shape = (3, IMAGE_SIZE, IMAGE_SIZE)
@@ -143,18 +214,42 @@ def infer_from_json_dict(data: dict, model, normalizer):
         else nullcontext()
     )
     with torch.no_grad(), autocast_context:
-        action = model.run_inference(
+        embedding_output = model.get_vl_embeddings(
             images=images,
             image_mask=image_mask,
             prompt=prompt,
-            state_input=norm_state,
+            return_hidden_states=model.use_bridge,
+        )
+        if hasattr(embedding_output, "fused_tokens"):
+            fused_tokens = embedding_output.fused_tokens
+            hidden_states = embedding_output.hidden_states
+        else:
+            fused_tokens = embedding_output
+            hidden_states = None
+
+        executed_actions, executed_action_mask = (None, None)
+        if runtime_state is not None:
+            executed_actions, executed_action_mask = runtime_state.progress_inputs(
+                model,
+                device=device,
+                dtype=fused_tokens.dtype,
+            )
+
+        action = model.predict_action(
+            fused_tokens,
+            norm_state,
             action_mask=action_mask,
+            hidden_states=hidden_states,
+            executed_actions=executed_actions,
+            executed_action_mask=executed_action_mask,
         )
         if action.numel() % model_action_dim != 0:
             raise ValueError(f"Model returned {action.numel()} action values, not divisible by per_action_dim={model_action_dim}")
-        action = action.reshape(1, -1, model_action_dim)
-        action = normalizer.denormalize_action(action[0], robot_key=robot_key)
-        actions = action.cpu().numpy().tolist()
+        normalized_action = action.reshape(1, -1, model_action_dim)
+        if runtime_state is not None:
+            runtime_state.store_executed_actions(model, normalized_action)
+        denormalized_action = normalizer.denormalize_action(normalized_action[0], robot_key=robot_key)
+        actions = denormalized_action.cpu().numpy().tolist()
         if not request["return_debug"]:
             return actions
         return {"actions": actions}
@@ -162,12 +257,13 @@ def infer_from_json_dict(data: dict, model, normalizer):
 
 async def handle_request(websocket, model, normalizer):
     logging.info("Client connected")
+    runtime_state = RuntimePolicyState()
     try:
         async for message in websocket:
             try:
                 json_data = json.loads(message)
                 logging.info("Received JSON observation")
-                actions = infer_from_json_dict(json_data, model, normalizer)
+                actions = infer_from_json_dict(json_data, model, normalizer, runtime_state)
                 await websocket.send(json.dumps(actions))
                 logging.info("Sent action chunk")
             except Exception as exc:

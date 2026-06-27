@@ -44,6 +44,9 @@ def test_build_training_config_uses_defaults_and_cli_overrides():
     assert config["batch_size"] == 3
     assert config["dataset_config_path"] == "configs/datasets/simulation.yaml"
     assert config["save_dir"] == "run_outputs/training/from_cli"
+    assert config["num_inference_timesteps"] == 15
+    assert config["inference_tau_schedule"] == "midpoint"
+    assert config["avoid_endpoint_tau"] is True
 
 
 def test_build_param_groups_rejects_model_with_no_trainable_parameters():
@@ -51,6 +54,35 @@ def test_build_param_groups_rejects_model_with_no_trainable_parameters():
 
     with pytest.raises(ValueError, match="No trainable parameters"):
         train_script.build_param_groups(_FrozenModel(), wd=0.01)
+
+
+def test_build_param_groups_applies_stage1_lr_and_no_decay_rules():
+    torch = pytest.importorskip("torch")
+    train_script = _load_train_script()
+
+    model = torch.nn.Module()
+    model.action_head = torch.nn.Module()
+    model.action_head.plan_gate_logits = torch.nn.Parameter(torch.zeros(2))
+    model.action_head.action_encoder = torch.nn.Linear(3, 4)
+    model.action_head.short_memory_adapter = torch.nn.Linear(4, 4)
+
+    groups = train_script.build_param_groups(
+        model,
+        wd=0.001,
+        base_lr=5e-5,
+        lr_groups={
+            "gates": 5e-5,
+            "noisy_action_encoder": 1e-4,
+            "short_memory_projector": 1e-4,
+        },
+    )
+
+    by_name = {group.get("name", ""): group for group in groups}
+
+    assert by_name["gates.no_decay"]["lr"] == 5e-5
+    assert by_name["gates.no_decay"]["weight_decay"] == 0.0
+    assert by_name["noisy_action_encoder.decay"]["lr"] == 1e-4
+    assert by_name["short_memory_projector.decay"]["lr"] == 1e-4
 
 
 def test_unwrap_training_model_uses_accelerator_when_available(monkeypatch):
@@ -95,7 +127,7 @@ def test_compute_bridge_auxiliary_loss_uses_boundary_and_progress_labels():
     loss, metrics = train_script.compute_bridge_auxiliary_loss(
         model,
         batch,
-        {"boundary_loss_weight": 1.0, "progress_loss_weight": 0.2},
+        {"enable_bridge_aux_loss": True, "boundary_loss_weight": 1.0, "progress_loss_weight": 0.2},
     )
 
     assert loss is not None
@@ -175,6 +207,7 @@ def test_compute_coarse_planner_loss_uses_cached_model_output():
         model,
         batch,
         {
+            "enable_coarse_planner_loss": True,
             "coarse_planner_loss_weight": 0.5,
             "coarse_planner_gripper_indices": [],
         },

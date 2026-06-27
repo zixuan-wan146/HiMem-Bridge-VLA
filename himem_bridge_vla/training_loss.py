@@ -3,7 +3,13 @@ from __future__ import annotations
 from typing import Any
 
 
-def masked_flow_matching_mse(pred_velocity: Any, target_velocity: Any, action_mask: Any) -> Any:
+def masked_flow_matching_mse(
+    pred_velocity: Any,
+    target_velocity: Any,
+    action_mask: Any,
+    *,
+    denom_eps: float = 1.0e-8,
+) -> Any:
     """Mean squared error over active action dimensions only."""
 
     if pred_velocity.shape != target_velocity.shape:
@@ -26,7 +32,7 @@ def masked_flow_matching_mse(pred_velocity: Any, target_velocity: Any, action_ma
         )
 
     squared_error = (pred_velocity - target_velocity).pow(2) * flat_mask
-    return squared_error.sum() / active_dims
+    return squared_error.sum() / (active_dims + float(denom_eps))
 
 
 def boundary_bce_loss(boundary_logits: Any, boundary_labels: Any) -> Any:

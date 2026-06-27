@@ -9,6 +9,7 @@ bridge_himem/
   base.yaml                         Shared defaults for current direct bridge-attn experiments
   experiments/
     baseline.yaml                   Fused-token baseline
+    direct_progress_w4.yaml         Direct bridge with frozen W4 progress planner
     crosskv_clean.yaml              Legacy cross-attention bridge baseline
     mixed_latent_clean.yaml         Legacy mixed-latent bridge baseline
     mixed_latent_skill.yaml         Mixed-latent plus learnable skill tokens
@@ -50,6 +51,18 @@ Relative dataset paths in these YAML files are resolved from `--dataset_config_b
 Training profiles keep experiment hyperparameters out of shell commands. Use CLI arguments only for machine-local overrides such as `--save_dir`, `--cache_dir`, `--resume_path`, or one-off ablations.
 
 Validate profiles before training with `python scripts/validate_training_configs.py`.
+
+Current checked-in template:
+
+```text
+training_templates/libero_10_stage1_direct_progress_w4.yaml
+```
+
+This template expects a repo-local symlink `local_data -> /root/autodl-tmp` on the remote server. The resolved cache manifest is:
+
+```text
+local_data/token_caches/libero_10_memory_replay_internvl3_hidden_l3_6_9_12_s16_dedup_parts4/manifest.json
+```
 
 ## DeepSpeed
 

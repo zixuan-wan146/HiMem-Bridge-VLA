@@ -207,6 +207,8 @@ def encode_batch_embeddings(model, prompts, images_batch, image_masks, *, return
 
 
 def compute_bridge_auxiliary_loss(model, batch: dict, config: dict) -> tuple[Any, dict[str, float]]:
+    if not bool(config.get("enable_bridge_aux_loss", False)):
+        return None, {}
     bridge_output = getattr(unwrap_training_model(model), "last_bridge_output", None)
     if bridge_output is None:
         return None, {}
@@ -253,6 +255,8 @@ def load_action_segment_autoencoder(checkpoint_path: str | None, *, device: Any)
 
 
 def compute_coarse_planner_loss(model, batch: dict, config: dict, segment_autoencoder=None) -> tuple[Any, dict[str, float]]:
+    if not bool(config.get("enable_coarse_planner_loss", False)):
+        return None, {}
     planner_output = getattr(unwrap_training_model(model), "last_coarse_planner_output", None)
     if planner_output is None or segment_autoencoder is None:
         return None, {}
@@ -669,18 +673,88 @@ def get_and_clip_grad_norm(accelerator, model, loss, max_norm: float = 1.0):
 
     return total_norm, clipped_norm
 
-def build_param_groups(model, wd):
-    decay, no_decay = [], []
+NO_WEIGHT_DECAY_NAME_PARTS = (
+    "norm",
+    "layernorm",
+    "rmsnorm",
+    "gate",
+    "pos_encoding",
+    "pos_embedding",
+    "position_embedding",
+    "time_embedding",
+    "timestep_embedding",
+)
+
+
+LR_GROUP_PATTERNS = (
+    ("gates", ("gate",)),
+    ("flow_time_embedding", ("time_pos_enc",)),
+    ("timestep_mlp", ("timestep_mlp", "time_mlp")),
+    ("noisy_action_encoder", ("action_head.action_encoder",)),
+    ("action_pos_embedding", ("action_head.action_encoder.pos_encoding",)),
+    ("temporal_pos_embedding", ("temporal_pos_embedding", "time_embedding", "short_memory_time_embedding")),
+    ("bridge_attention", ("transformer_blocks", "self_attn", "visual_cross_attn", "action_cross_attn")),
+    ("bridge_adapter", ("bridge_adapter",)),
+    ("short_memory_encoder", ("short_memory",)),
+    ("short_memory_projector", ("short_memory_adapter",)),
+    ("plan_projector", ("plan_adapter", "plan_slot_embeddings", "plan_src_emb")),
+    ("progress_condition_projector", ("progress_condition_projector",)),
+    ("source_mlp", ("state_encoder", "vlm_src_emb", "mem_src_emb", "state_src_emb")),
+    ("action_head", ("action_head.action_decoder", "norm_out")),
+    ("flow_matching_action_head", ("action_head",)),
+    ("action_expert", ("action_head.transformer_blocks",)),
+)
+
+
+def _uses_no_weight_decay(name: str, param: Any) -> bool:
+    lowered = name.lower()
+    if name.endswith("bias") or ".bias" in name:
+        return True
+    if getattr(param, "dim", lambda: 0)() <= 1:
+        return True
+    return any(part in lowered for part in NO_WEIGHT_DECAY_NAME_PARTS)
+
+
+def _resolve_lr_group(name: str, lr_groups: dict[str, Any] | None) -> str | None:
+    if not lr_groups:
+        return None
+    lowered = name.lower()
+    for group_name, patterns in LR_GROUP_PATTERNS:
+        if group_name not in lr_groups:
+            continue
+        if any(pattern in lowered for pattern in patterns):
+            return group_name
+    return None
+
+
+def build_param_groups(model, wd, base_lr: float | None = None, lr_groups: dict[str, Any] | None = None):
+    buckets: dict[tuple[str | None, bool, float | None], list[Any]] = {}
     for n, p in model.named_parameters():
         if not p.requires_grad: 
             continue
-        is_bias = n.endswith("bias") or ".bias" in n
-        is_norm = (p.dim() == 1) or ("norm" in n.lower())
-        (no_decay if is_bias or is_norm else decay).append(p)
-    if not decay and not no_decay:
+        lr_group = _resolve_lr_group(n, lr_groups)
+        group_lr = None
+        if lr_group is not None:
+            group_lr = float(lr_groups[lr_group])
+        elif base_lr is not None:
+            group_lr = float(base_lr)
+        no_decay = _uses_no_weight_decay(n, p)
+        buckets.setdefault((lr_group, no_decay, group_lr), []).append(p)
+    if not buckets:
         raise ValueError("No trainable parameters found. Check finetune flags and Bridge-HiMem config.")
-    return [{"params": decay, "weight_decay": wd},
-            {"params": no_decay, "weight_decay": 0.0}]
+
+    param_groups = []
+    for (lr_group, no_decay, group_lr), params in buckets.items():
+        group = {
+            "params": params,
+            "weight_decay": 0.0 if no_decay else wd,
+        }
+        if group_lr is not None:
+            group["lr"] = group_lr
+        if lr_group is not None:
+            group["name"] = f"{lr_group}.{'no_decay' if no_decay else 'decay'}"
+        param_groups.append(group)
+    return param_groups
 
 def train(config):
     _ensure_training_runtime()
@@ -725,9 +799,21 @@ def train(config):
 
     lr = get_with_warning(config, "lr", 1e-5)
     wd = get_with_warning(config, "weight_decay", 1e-5)
-    optimizer = AdamW(build_param_groups(model, wd), lr=lr)
+    lr_groups = config.get("lr_groups") or {}
+    optimizer_param_groups = build_param_groups(model, wd, base_lr=lr, lr_groups=lr_groups)
+    optimizer = AdamW(optimizer_param_groups, lr=lr)
     if accelerator.is_main_process:
-        logging.info(f"Optimizer=AdamW, lr={lr}, weight_decay={wd}")
+        logging.info(f"Optimizer=AdamW, base_lr={lr}, weight_decay={wd}")
+        for index, group in enumerate(optimizer_param_groups):
+            group_name = group.get("name", f"group_{index}")
+            group_params = sum(param.numel() for param in group["params"])
+            logging.info(
+                "Optimizer group %s | lr=%s | weight_decay=%s | params=%.3fM",
+                group_name,
+                group.get("lr", lr),
+                group.get("weight_decay", wd),
+                group_params / 1e6,
+            )
 
 
     model, optimizer, dataloader = accelerator.prepare(model, optimizer, dataloader)
@@ -750,10 +836,14 @@ def train(config):
     # === Checkpoint and save path setup ===
     os.makedirs(save_dir, exist_ok=True)
     best_loss = float("inf")
+    last_best_checkpoint_step = -1
+    norm_stats = getattr(dataset, "arm2stats_dict", None)
     
     # === Logging and interval settings ===
     log_interval = get_with_warning(config, "log_interval", 100)
     ckpt_interval = get_with_warning(config, "ckpt_interval", 1000)
+    best_ckpt_interval = int(get_with_warning(config, "best_ckpt_interval", ckpt_interval))
+    best_ckpt_min_step = int(get_with_warning(config, "best_ckpt_min_step", get_with_warning(config, "warmup_steps", 0)))
     max_norm = get_with_warning(config, "grad_clip_norm", 1.0)
 
     # === Resume training from checkpoint ===
@@ -790,11 +880,10 @@ def train(config):
 
     if accelerator.is_main_process:
         
-        modules_to_inspect = {
-            "vision_model": unwrapped_model.embedder.model.vision_model,
-            "language_model": unwrapped_model.embedder.model.language_model,
-            "action_head": unwrapped_model.action_head,
-        }
+        modules_to_inspect = {"action_head": unwrapped_model.action_head}
+        if unwrapped_model.embedder is not None:
+            modules_to_inspect["vision_model"] = unwrapped_model.embedder.model.vision_model
+            modules_to_inspect["language_model"] = unwrapped_model.embedder.model.language_model
         if unwrapped_model.bridge_adapter is not None:
             modules_to_inspect["bridge_adapter"] = unwrapped_model.bridge_adapter
         if unwrapped_model.coarse_planner is not None:
@@ -953,8 +1042,6 @@ def train(config):
             loss_value = loss.item()
             if accelerator.is_main_process:
                 is_best = loss_value < best_loss
-                if is_best:
-                    best_loss = loss_value
                 is_best_tensor = torch.tensor(int(is_best), device=accelerator.device)
             else:
                 is_best_tensor = torch.tensor(0, device=accelerator.device)
@@ -962,7 +1049,16 @@ def train(config):
             if accelerator.distributed_type != DistributedType.NO:
                 torch.distributed.broadcast(is_best_tensor, src=0)
             
-            if is_best_tensor.item() == 1 and step > 1000:
+            should_save_best = (
+                is_best_tensor.item() == 1
+                and best_ckpt_interval > 0
+                and step >= best_ckpt_min_step
+                and (
+                    last_best_checkpoint_step < 0
+                    or step - last_best_checkpoint_step >= best_ckpt_interval
+                )
+            )
+            if should_save_best:
                 if accelerator.is_main_process:
                     logging.info("Saving best checkpoint")
                 save_checkpoint(
@@ -972,17 +1068,19 @@ def train(config):
                     loss=loss,
                     accelerator=accelerator,
                     config=config,
-                    norm_stats=dataset.arm2stats_dict,
+                    norm_stats=norm_stats,
                     tag="step_best",
                 )
+                last_best_checkpoint_step = step
                 if accelerator.is_main_process:
+                    best_loss = loss_value
                     logging.info(f"Saved best checkpoint at step {step} with loss {loss_value:.6f}")
 
             step += 1
 
             # === Save periodic checkpoint ===
             if step % ckpt_interval == 0 and step > 0:
-                save_checkpoint(save_dir, step=step, model_engine=model_engine, loss=loss, accelerator=accelerator, config=config, norm_stats=dataset.arm2stats_dict)
+                save_checkpoint(save_dir, step=step, model_engine=model_engine, loss=loss, accelerator=accelerator, config=config, norm_stats=norm_stats)
          
     # === Save final model ===
     save_checkpoint(
@@ -992,7 +1090,7 @@ def train(config):
         loss=loss,
         accelerator=accelerator,
         config=config,
-        norm_stats=dataset.arm2stats_dict,
+        norm_stats=norm_stats,
         tag="step_final",
     )
     logging.info("Final model saved to step_final/")
@@ -1007,6 +1105,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--device", type=str, default=argparse.SUPPRESS)
     parser.add_argument("--run_name", type=str, default=argparse.SUPPRESS)
     parser.add_argument("--vlm_name", type=str, default=argparse.SUPPRESS)
+    parser.add_argument("--load_vlm", action=argparse.BooleanOptionalAction, default=argparse.SUPPRESS)
     parser.add_argument("--action_head", type=str, choices=["flowmatching"], default=argparse.SUPPRESS)
     parser.add_argument("--bridge_himem_config", type=str, default=argparse.SUPPRESS)
     parser.add_argument("--seed", type=int, default=argparse.SUPPRESS)
@@ -1058,10 +1157,14 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--weight_decay", type=float, default=argparse.SUPPRESS)
     parser.add_argument("--boundary_loss_weight", type=float, default=argparse.SUPPRESS)
     parser.add_argument("--progress_loss_weight", type=float, default=argparse.SUPPRESS)
+    parser.add_argument("--enable_bridge_aux_loss", action=argparse.BooleanOptionalAction, default=argparse.SUPPRESS)
+    parser.add_argument("--enable_coarse_planner_loss", action=argparse.BooleanOptionalAction, default=argparse.SUPPRESS)
 
     # Logging & checkpointing
     parser.add_argument("--log_interval", type=int, default=argparse.SUPPRESS)
     parser.add_argument("--ckpt_interval", type=int, default=argparse.SUPPRESS)
+    parser.add_argument("--best_ckpt_interval", type=int, default=argparse.SUPPRESS)
+    parser.add_argument("--best_ckpt_min_step", type=int, default=argparse.SUPPRESS)
     parser.add_argument("--save_dir", type=str, default=argparse.SUPPRESS)
 
     # Resume
@@ -1090,6 +1193,8 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--short_memory_time_bins", type=int, default=argparse.SUPPRESS)
     parser.add_argument("--max_vlm_tokens", type=int, default=argparse.SUPPRESS)
     parser.add_argument("--num_inference_timesteps", type=int, default=argparse.SUPPRESS)
+    parser.add_argument("--inference_tau_schedule", type=str, default=argparse.SUPPRESS)
+    parser.add_argument("--avoid_endpoint_tau", action=argparse.BooleanOptionalAction, default=argparse.SUPPRESS)
     parser.add_argument("--num_workers", type=int, default=argparse.SUPPRESS)
     parser.add_argument("--dropout", type=float, default=argparse.SUPPRESS)
     return parser

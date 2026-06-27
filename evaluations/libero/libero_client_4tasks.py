@@ -60,6 +60,7 @@ def obs_to_json_dict(
     obs,
     prompt,
     resize_size=448,
+    reset_memory=False,
 ):
     img = np.ascontiguousarray(obs["agentview_image"][::-1, ::-1])
     wrist_img = np.ascontiguousarray(obs["robot0_eye_in_hand_image"][::-1, ::-1])
@@ -79,6 +80,7 @@ def obs_to_json_dict(
         "prompt": prompt,
         "image_mask": [1, 1, 0],
         "action_mask": [1] * 7 + [0] * 17,
+        "reset_memory": bool(reset_memory),
     }
     return data
 
@@ -175,6 +177,7 @@ async def run(SERVER_URL: str, max_steps: int = None, num_episodes: int = None, 
                         send_data = obs_to_json_dict(
                             obs,
                             prompt,
+                            reset_memory=(step == 0),
                         )
                         await ws.send(json.dumps(send_data))
                         log.debug(f"[Step {step}] Send observation")

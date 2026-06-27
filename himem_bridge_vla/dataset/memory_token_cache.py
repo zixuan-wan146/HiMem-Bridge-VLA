@@ -256,9 +256,17 @@ def build_memory_replay_token_cache(
     pending: list[dict[str, Any]] = []
     shards: list[TokenCacheShard] = []
     sample_count = 0
+    visual_token_cache: dict[tuple[str, str, int], dict[str, Any]] = {}
+    hidden_state_cache: dict[tuple[str, str, int, str], tuple[Any, ...]] = {}
+    action_min: np.ndarray | None = None
+    action_max: np.ndarray | None = None
+    state_min: np.ndarray | None = None
+    state_max: np.ndarray | None = None
 
     for dataset_index in range(len(dataset)):
         item = dataset[dataset_index]
+        action_min, action_max = _update_running_minmax(action_min, action_max, item["future_actions"], name="future_actions")
+        state_min, state_max = _update_running_minmax(state_min, state_max, item["current_state"], name="current_state")
         pending.append(
             encode_memory_replay_item(
                 item,
@@ -266,6 +274,8 @@ def build_memory_replay_token_cache(
                 hidden_state_encoder=hidden_state_encoder,
                 storage_dtype=target_dtype,
                 sample_index=dataset_index,
+                visual_token_cache=visual_token_cache,
+                hidden_state_cache=hidden_state_cache,
             )
         )
         sample_count += 1
@@ -275,6 +285,27 @@ def build_memory_replay_token_cache(
 
     if pending:
         shards.append(_write_token_cache_shard(shard_dir, pending, start_index=sample_count - len(pending)))
+
+    extra = dict(manifest_extra or {})
+    extra.setdefault("builder_mode", "frame_token_dedup")
+    extra["visual_token_cache_entries"] = len(visual_token_cache)
+    if hidden_state_encoder is not None:
+        extra["hidden_state_cache_entries"] = len(hidden_state_cache)
+    if action_min is not None and action_max is not None and state_min is not None and state_max is not None:
+        extra["normalization"] = _build_minmax_normalization_manifest(
+            benchmark=benchmark,
+            action_min=action_min,
+            action_max=action_max,
+            state_min=state_min,
+            state_max=state_max,
+        )
+        extra["action_normalization"] = {
+            "enabled": True,
+            "type": "train_split_minmax_to_minus_one_one",
+            "clip_after_normalization": True,
+            "clip_range": [-1.0, 1.0],
+            "statistics_from": "cache_build_rows",
+        }
 
     manifest = build_token_cache_manifest(
         benchmark=benchmark,
@@ -289,7 +320,7 @@ def build_memory_replay_token_cache(
         max_samples_per_shard=max_samples_per_shard,
         view_names=view_names,
         shards=shards,
-        extra=manifest_extra,
+        extra=extra,
     )
     manifest_path = output_path / "manifest.json"
     with manifest_path.open("w", encoding="utf-8") as handle:
@@ -311,25 +342,44 @@ def encode_memory_replay_item(
     hidden_state_encoder: VLMHiddenStateEncoder | None = None,
     storage_dtype: Any,
     sample_index: int,
+    visual_token_cache: dict[tuple[str, str, int], dict[str, Any]] | None = None,
+    hidden_state_cache: dict[tuple[str, str, int, str], tuple[Any, ...]] | None = None,
 ) -> dict[str, Any]:
     torch = _require_torch()
-    current_tokens = encode_images_by_view(item["current_images"], encoder=encoder, storage_dtype=storage_dtype)
+    benchmark = str(item["benchmark"])
+    episode_id = str(item["episode_id"])
+    current_step = int(item["current_step"])
+    current_tokens = _get_or_encode_frame_tokens(
+        item["current_images"],
+        cache_key=(benchmark, episode_id, current_step),
+        encoder=encoder,
+        storage_dtype=storage_dtype,
+        visual_token_cache=visual_token_cache,
+    )
+    short_entries = tuple(item["short_images"])
+    short_steps = _short_steps_tensor(item, len(short_entries))
     short_tokens = tuple(
         None
-        if images_by_view is None
-        else encode_images_by_view(images_by_view, encoder=encoder, storage_dtype=storage_dtype)
-        for images_by_view in item["short_images"]
+        if images_by_view is None or int(short_steps[entry_index].item()) < 0
+        else _get_or_encode_frame_tokens(
+            images_by_view,
+            cache_key=(benchmark, episode_id, int(short_steps[entry_index].item())),
+            encoder=encoder,
+            storage_dtype=storage_dtype,
+            visual_token_cache=visual_token_cache,
+        )
+        for entry_index, images_by_view in enumerate(short_entries)
     )
     encoded = {
         "sample_index": int(sample_index),
-        "benchmark": str(item["benchmark"]),
-        "episode_id": str(item["episode_id"]),
+        "benchmark": benchmark,
+        "episode_id": episode_id,
         "prompt": str(item.get("prompt", "")),
-        "current_step": int(item["current_step"]),
+        "current_step": current_step,
         "current_tokens_by_view": current_tokens,
         "current_state": torch.as_tensor(item["current_state"], dtype=torch.float32).cpu(),
         "short_tokens_by_view": short_tokens,
-        "short_steps": _short_steps_tensor(item, len(short_tokens)),
+        "short_steps": short_steps,
         "short_mask": torch.as_tensor(item["short_mask"], dtype=torch.bool).cpu(),
         "executed_actions": torch.as_tensor(item["executed_actions"], dtype=torch.float32).cpu(),
         "executed_action_mask": torch.as_tensor(item["executed_action_mask"], dtype=torch.bool).cpu(),
@@ -337,14 +387,51 @@ def encode_memory_replay_item(
         "action_valid_count": int(item["action_valid_count"]),
     }
     if hidden_state_encoder is not None:
-        encoded["current_hidden_states"] = tuple(
-            ensure_rank2_tokens(hidden_state, storage_dtype=storage_dtype)
-            for hidden_state in hidden_state_encoder.encode_current(
-                item["current_images"],
-                str(item.get("prompt", "")),
-            )
+        encoded["current_hidden_states"] = _get_or_encode_hidden_states(
+            item["current_images"],
+            prompt=str(item.get("prompt", "")),
+            cache_key=(benchmark, episode_id, current_step, str(item.get("prompt", ""))),
+            hidden_state_encoder=hidden_state_encoder,
+            storage_dtype=storage_dtype,
+            hidden_state_cache=hidden_state_cache,
         )
     return encoded
+
+
+def _get_or_encode_frame_tokens(
+    images_by_view: Mapping[str, Image.Image],
+    *,
+    cache_key: tuple[str, str, int],
+    encoder: VisualTokenEncoder,
+    storage_dtype: Any,
+    visual_token_cache: dict[tuple[str, str, int], dict[str, Any]] | None,
+) -> dict[str, Any]:
+    if visual_token_cache is not None and cache_key in visual_token_cache:
+        return visual_token_cache[cache_key]
+    tokens = encode_images_by_view(images_by_view, encoder=encoder, storage_dtype=storage_dtype)
+    if visual_token_cache is not None:
+        visual_token_cache[cache_key] = tokens
+    return tokens
+
+
+def _get_or_encode_hidden_states(
+    images_by_view: Mapping[str, Image.Image],
+    *,
+    prompt: str,
+    cache_key: tuple[str, str, int, str],
+    hidden_state_encoder: VLMHiddenStateEncoder,
+    storage_dtype: Any,
+    hidden_state_cache: dict[tuple[str, str, int, str], tuple[Any, ...]] | None,
+) -> tuple[Any, ...]:
+    if hidden_state_cache is not None and cache_key in hidden_state_cache:
+        return hidden_state_cache[cache_key]
+    hidden_states = tuple(
+        ensure_rank2_tokens(hidden_state, storage_dtype=storage_dtype)
+        for hidden_state in hidden_state_encoder.encode_current(images_by_view, prompt)
+    )
+    if hidden_state_cache is not None:
+        hidden_state_cache[cache_key] = hidden_states
+    return hidden_states
 
 
 def encode_images_by_view(
@@ -433,6 +520,100 @@ def build_token_cache_manifest(
     return manifest
 
 
+def _update_running_minmax(
+    current_min: np.ndarray | None,
+    current_max: np.ndarray | None,
+    values: Any,
+    *,
+    name: str,
+) -> tuple[np.ndarray, np.ndarray]:
+    array = np.asarray(values, dtype=np.float32)
+    if array.size == 0:
+        raise ValueError(f"{name} must not be empty when building token-cache normalization stats")
+    if array.ndim == 1:
+        array = array.reshape(1, -1)
+    elif array.ndim >= 2:
+        array = array.reshape(-1, array.shape[-1])
+    else:
+        raise ValueError(f"{name} must have at least one dimension")
+    if array.shape[-1] <= 0:
+        raise ValueError(f"{name} last dimension must be positive")
+    finite = np.isfinite(array)
+    if not bool(finite.all()):
+        raise ValueError(f"{name} contains non-finite values")
+
+    value_min = array.min(axis=0)
+    value_max = array.max(axis=0)
+    if current_min is None or current_max is None:
+        return value_min, value_max
+    if current_min.shape != value_min.shape or current_max.shape != value_max.shape:
+        raise ValueError(
+            f"{name} dimension changed while building normalization stats: "
+            f"{current_min.shape} -> {value_min.shape}"
+        )
+    return np.minimum(current_min, value_min), np.maximum(current_max, value_max)
+
+
+def _build_minmax_normalization_manifest(
+    *,
+    benchmark: str,
+    action_min: np.ndarray,
+    action_max: np.ndarray,
+    state_min: np.ndarray,
+    state_max: np.ndarray,
+) -> dict[str, Any]:
+    robot_key = _normalization_robot_key(benchmark)
+    return {
+        "enabled": True,
+        "type": "train_split_minmax_to_minus_one_one",
+        "statistics_from": "cache_build_rows",
+        "clip_after_normalization": True,
+        "clip_range": [-1.0, 1.0],
+        "robot_key": robot_key,
+        "stats": {
+            robot_key: {
+                "observation.state": {
+                    "min": np.asarray(state_min, dtype=np.float32).astype(float).tolist(),
+                    "max": np.asarray(state_max, dtype=np.float32).astype(float).tolist(),
+                },
+                "action": {
+                    "min": np.asarray(action_min, dtype=np.float32).astype(float).tolist(),
+                    "max": np.asarray(action_max, dtype=np.float32).astype(float).tolist(),
+                },
+            }
+        },
+    }
+
+
+def _normalization_robot_key(benchmark: str) -> str:
+    return str(benchmark).strip().lower() or "default"
+
+
+def _parse_token_cache_normalization(manifest: Mapping[str, Any]) -> dict[str, Any] | None:
+    normalization = manifest.get("normalization")
+    if not isinstance(normalization, Mapping) or not bool(normalization.get("enabled", False)):
+        return None
+    if normalization.get("type") != "train_split_minmax_to_minus_one_one":
+        raise ValueError(f"unsupported token-cache normalization type: {normalization.get('type')!r}")
+    stats = normalization.get("stats")
+    if not isinstance(stats, Mapping) or not stats:
+        raise ValueError("token-cache normalization must contain non-empty stats")
+    robot_key = str(normalization.get("robot_key") or next(iter(stats)))
+    if robot_key not in stats:
+        raise KeyError(f"normalization robot_key {robot_key!r} not found in stats")
+    robot_stats = stats[robot_key]
+    for group_name in ("observation.state", "action"):
+        group = robot_stats.get(group_name)
+        if not isinstance(group, Mapping) or "min" not in group or "max" not in group:
+            raise ValueError(f"normalization stats missing {group_name}.min/max")
+    return {
+        "type": normalization["type"],
+        "robot_key": robot_key,
+        "stats": {str(key): value for key, value in stats.items()},
+        "clip_after_normalization": bool(normalization.get("clip_after_normalization", True)),
+    }
+
+
 class MemoryTokenCacheDataset:
     """PyTorch-compatible dataset over replay visual-token cache shards."""
 
@@ -443,6 +624,8 @@ class MemoryTokenCacheDataset:
         self.output_root = self.manifest_path.parent
         self.shards = tuple(_resolve_manifest_shards(self.manifest, self.output_root))
         self.shard_end_indices = tuple(shard.end_index for shard in self.shards)
+        self.normalization = _parse_token_cache_normalization(self.manifest)
+        self.arm2stats_dict = None if self.normalization is None else dict(self.normalization["stats"])
 
         sample_count = int(self.manifest["sample_count"])
         if max_samples is not None:
@@ -476,7 +659,8 @@ class MemoryTokenCacheDataset:
         shard = self.shards[shard_index]
         samples = self._load_shard_samples(shard_index)
         local_index = index - shard.start_index
-        return normalize_token_cache_sample(samples[local_index])
+        sample = normalize_token_cache_sample(samples[local_index])
+        return _apply_token_cache_normalization(sample, self.normalization)
 
     def _load_shard_samples(self, shard_index: int) -> list[dict[str, Any]]:
         if self._loaded_shard_index == shard_index and self._loaded_shard_samples is not None:
@@ -706,6 +890,80 @@ def normalize_token_cache_sample(sample: Mapping[str, Any]) -> dict[str, Any]:
     normalized["episode_id"] = str(normalized["episode_id"])
     normalized["prompt"] = str(normalized.get("prompt", ""))
     return normalized
+
+
+def _apply_token_cache_normalization(
+    sample: dict[str, Any],
+    normalization: Mapping[str, Any] | None,
+) -> dict[str, Any]:
+    if normalization is None:
+        return sample
+
+    torch = _require_torch()
+    robot_key = str(normalization["robot_key"])
+    stats = normalization["stats"][robot_key]
+    clip = bool(normalization.get("clip_after_normalization", True))
+
+    state_min = torch.as_tensor(stats["observation.state"]["min"], dtype=torch.float32)
+    state_max = torch.as_tensor(stats["observation.state"]["max"], dtype=torch.float32)
+    action_min = torch.as_tensor(stats["action"]["min"], dtype=torch.float32)
+    action_max = torch.as_tensor(stats["action"]["max"], dtype=torch.float32)
+
+    sample["current_state"] = _minmax_normalize_tensor(
+        torch.as_tensor(sample["current_state"], dtype=torch.float32).cpu(),
+        state_min,
+        state_max,
+        clip=clip,
+        name="current_state",
+    )
+    sample["future_actions"] = _minmax_normalize_tensor(
+        torch.as_tensor(sample["future_actions"], dtype=torch.float32).cpu(),
+        action_min,
+        action_max,
+        clip=clip,
+        name="future_actions",
+    )
+    if "executed_actions" in sample:
+        executed = _minmax_normalize_tensor(
+            torch.as_tensor(sample["executed_actions"], dtype=torch.float32).cpu(),
+            action_min,
+            action_max,
+            clip=clip,
+            name="executed_actions",
+        )
+        if "executed_action_mask" in sample:
+            mask = torch.as_tensor(sample["executed_action_mask"], dtype=torch.bool).cpu()
+            if mask.shape != executed.shape[:1]:
+                raise ValueError(f"executed_action_mask shape {tuple(mask.shape)} does not match executed_actions")
+            executed = executed * mask.unsqueeze(-1).to(dtype=executed.dtype)
+        sample["executed_actions"] = executed
+    return sample
+
+
+def _minmax_normalize_tensor(
+    value: Any,
+    min_value: Any,
+    max_value: Any,
+    *,
+    clip: bool,
+    name: str,
+) -> Any:
+    torch = _require_torch()
+    tensor = torch.as_tensor(value, dtype=torch.float32).cpu()
+    min_tensor = torch.as_tensor(min_value, dtype=torch.float32).cpu()
+    max_tensor = torch.as_tensor(max_value, dtype=torch.float32).cpu()
+    dim = int(tensor.shape[-1]) if tensor.ndim > 0 else 1
+    if dim > int(min_tensor.shape[0]) or dim > int(max_tensor.shape[0]):
+        raise ValueError(
+            f"{name} dim {dim} exceeds normalization stats dims "
+            f"{tuple(min_tensor.shape)}, {tuple(max_tensor.shape)}"
+        )
+    min_tensor = min_tensor[:dim].to(dtype=tensor.dtype)
+    max_tensor = max_tensor[:dim].to(dtype=tensor.dtype)
+    normalized = 2.0 * (tensor - min_tensor) / (max_tensor - min_tensor + 1e-8) - 1.0
+    if clip:
+        normalized = torch.clamp(normalized, -1.0, 1.0)
+    return normalized.contiguous()
 
 
 def read_token_cache_manifest(manifest_path: str | Path) -> dict[str, Any]:

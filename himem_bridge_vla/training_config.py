@@ -10,6 +10,7 @@ TRAINING_DEFAULTS: dict[str, Any] = {
     "device": "cuda",
     "run_name": "default_run",
     "vlm_name": "OpenGVLab/InternVL3-1B",
+    "load_vlm": True,
     "action_head": "flowmatching",
     "bridge_himem_config": None,
     "seed": None,
@@ -30,8 +31,13 @@ TRAINING_DEFAULTS: dict[str, Any] = {
     "warmup_steps": 300,
     "grad_clip_norm": 1.0,
     "weight_decay": 1e-5,
+    "lr_groups": {},
+    "enable_bridge_aux_loss": False,
+    "enable_coarse_planner_loss": False,
     "log_interval": 10,
     "ckpt_interval": 10,
+    "best_ckpt_interval": 1000,
+    "best_ckpt_min_step": 1000,
     "save_dir": "checkpoints",
     "resume": False,
     "resume_path": None,
@@ -54,6 +60,8 @@ TRAINING_DEFAULTS: dict[str, Any] = {
     "short_memory_time_bins": 2,
     "max_vlm_tokens": None,
     "num_inference_timesteps": 15,
+    "inference_tau_schedule": "midpoint",
+    "avoid_endpoint_tau": True,
     "num_workers": 4,
     "dropout": 0.0,
     "boundary_loss_weight": 1.0,
@@ -126,6 +134,7 @@ POSITIVE_INT_KEYS = (
     "max_steps",
     "log_interval",
     "ckpt_interval",
+    "best_ckpt_interval",
     "batch_size",
     "horizon",
     "per_action_dim",
@@ -141,6 +150,7 @@ POSITIVE_INT_KEYS = (
 NON_NEGATIVE_INT_KEYS = (
     "num_workers",
     "warmup_steps",
+    "best_ckpt_min_step",
 )
 
 POSITIVE_FLOAT_KEYS = (
@@ -208,6 +218,16 @@ def validate_training_config(
             if value <= 0:
                 raise ValueError(f"--{key} must be positive, got {value}")
 
+    lr_groups = config.get("lr_groups", {})
+    if lr_groups is None:
+        lr_groups = {}
+    if not isinstance(lr_groups, Mapping):
+        raise ValueError("--lr_groups must be a mapping from group name to learning rate")
+    for group_name, group_lr in lr_groups.items():
+        value = _as_float(group_lr, f"--lr_groups.{group_name}")
+        if value <= 0:
+            raise ValueError(f"--lr_groups.{group_name} must be positive, got {value}")
+
     for key in NON_NEGATIVE_FLOAT_KEYS:
         if key in config:
             value = _as_float(config[key], f"--{key}")
@@ -217,6 +237,10 @@ def validate_training_config(
     dropout = _as_float(config.get("dropout", 0.0), "--dropout")
     if dropout > 1:
         raise ValueError(f"--dropout must be <= 1, got {dropout}")
+
+    inference_tau_schedule = str(config.get("inference_tau_schedule", "midpoint")).lower()
+    if inference_tau_schedule != "midpoint":
+        raise ValueError("--inference_tau_schedule must be midpoint")
 
     warmup_steps = _as_int(config.get("warmup_steps", 0), "--warmup_steps")
     max_steps = _as_int(config.get("max_steps", 0), "--max_steps")
@@ -238,6 +262,11 @@ def validate_training_config(
         raise ValueError("--resume_pretrain requires --resume and --resume_path.")
     if resume and not path_exists(_validation_path(resume_path, repo_root, label="--resume_path")):
         raise FileNotFoundError(f"Resume checkpoint path not found: {resume_path}")
+
+    if bool(config.get("finetune_vlm", False)) and not bool(config.get("load_vlm", True)):
+        raise ValueError("--finetune_vlm=true requires --load_vlm=true")
+    if str(config.get("dataset_type", "simulation")) != "memory_token_cache" and not bool(config.get("load_vlm", True)):
+        raise ValueError("--load_vlm=false is only supported with dataset_type=memory_token_cache")
 
 
 def _as_int(value: Any, label: str) -> int:

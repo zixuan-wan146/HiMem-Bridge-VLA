@@ -145,15 +145,21 @@ def test_memory_token_cache_dataset_reads_shards_and_collates_short_visual_token
     dataset = MemoryTokenCacheDataset(result.output_root)
     sample = dataset[1]
     batch = collate_memory_token_cache_samples([dataset[0], sample])
+    manifest = json.loads(result.manifest_path.read_text(encoding="utf-8"))
 
     assert len(dataset) == 2
     assert dataset.config.hidden_dim == 8
+    assert manifest["normalization"]["type"] == "train_split_minmax_to_minus_one_one"
+    assert dataset.arm2stats_dict is not None
     assert sample["sample_index"] == 1
     assert sample["short_steps"].tolist() == [-1, 1]
     assert sample["short_mask"].tolist() == [False, True]
     assert tuple(sample["executed_actions"].shape) == (16, 7)
     assert tuple(sample["executed_action_mask"].shape) == (16,)
     assert sample["executed_action_mask"].sum().item() == 2
+    assert sample["future_actions"].amin().item() >= -1.0
+    assert sample["future_actions"].amax().item() <= 1.0
+    assert not sample["executed_actions"][:14].any().item()
     assert sample["short_tokens_by_view"][0] is None
     assert sample["short_tokens_by_view"][1]["agentview_rgb"].shape == (1, 8)
     assert batch["current_step"].tolist() == [0, 2]
@@ -180,6 +186,58 @@ def test_memory_token_cache_dataset_reads_shards_and_collates_short_visual_token
     assert tuple(direct_batch["action_mask"].shape) == (2, 4, 7)
     assert direct_batch["action_mask"][:, :2].all().item()
     assert not direct_batch["action_mask"][:, 2:].any().item()
+
+
+def test_build_memory_replay_token_cache_reuses_frame_visual_tokens(tmp_path):
+    libero_root = tmp_path / "libero" / "datasets"
+    _write_libero_episode(libero_root / "libero_spatial" / "pick_demo.hdf5")
+    rows = [
+        {
+            "benchmark": "LIBERO",
+            "episode_id": "libero_spatial:pick_demo:demo_0",
+            "episode_key": "demo_0",
+            "source_path": "libero_spatial/pick_demo.hdf5",
+            "current_step": 0,
+            "episode_length": 6,
+            "action_start": 0,
+            "action_end": 2,
+            "action_valid_count": 2,
+            "short_steps": [None, None],
+            "short_mask": [False, False],
+        },
+        {
+            "benchmark": "LIBERO",
+            "episode_id": "libero_spatial:pick_demo:demo_0",
+            "episode_key": "demo_0",
+            "source_path": "libero_spatial/pick_demo.hdf5",
+            "current_step": 2,
+            "episode_length": 6,
+            "action_start": 2,
+            "action_end": 4,
+            "action_valid_count": 2,
+            "short_steps": [0, None],
+            "short_mask": [True, False],
+        },
+    ]
+    index_path = write_memory_replay_jsonl(tmp_path / "index.jsonl", rows)
+    encoder = _CountingImageStatsVisualTokenEncoder(hidden_dim=8, tokens_per_view=1)
+
+    result = build_memory_replay_token_cache(
+        benchmark="LIBERO",
+        data_root=libero_root,
+        index_path=index_path,
+        output_root=tmp_path / "tokens",
+        encoder=encoder,
+        storage_dtype="float32",
+    )
+
+    manifest = json.loads(result.manifest_path.read_text(encoding="utf-8"))
+    dataset = MemoryTokenCacheDataset(result.output_root)
+
+    assert encoder.encode_calls == 4
+    assert manifest["builder_mode"] == "frame_token_dedup"
+    assert manifest["visual_token_cache_entries"] == 2
+    assert dataset[1]["short_tokens_by_view"][0]["agentview_rgb"].shape == (1, 8)
 
 
 def test_direct_bridge_collate_preserves_optional_vlm_hidden_states():
@@ -339,3 +397,13 @@ def _torch_load(path):
         return torch.load(path, weights_only=True)
     except TypeError:
         return torch.load(path)
+
+
+class _CountingImageStatsVisualTokenEncoder(ImageStatsVisualTokenEncoder):
+    def __init__(self, *, hidden_dim: int, tokens_per_view: int) -> None:
+        super().__init__(hidden_dim=hidden_dim, tokens_per_view=tokens_per_view)
+        self.encode_calls = 0
+
+    def encode_image(self, image):
+        self.encode_calls += 1
+        return super().encode_image(image)

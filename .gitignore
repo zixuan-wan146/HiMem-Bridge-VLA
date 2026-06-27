@@ -12,6 +12,8 @@ wandb/
 pretraining_data_cache/
 training_data_cache/
 .evo1-data/
+local_data
+local_data/
 logs/
 checkpoints/
 Evo1_training_dataset/
