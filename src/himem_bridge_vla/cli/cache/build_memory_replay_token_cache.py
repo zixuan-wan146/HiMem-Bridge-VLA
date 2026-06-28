@@ -24,8 +24,8 @@ from himem_bridge_vla.path_utils import display_project_path  # noqa: E402
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Build replay-token shards from a memory replay JSONL index.")
-    parser.add_argument("--benchmark", required=True, choices=("LIBERO", "RMBench", "rmbench", "libero"))
+    parser = argparse.ArgumentParser(description="Build RMBench replay-token shards from a memory replay JSONL index.")
+    parser.add_argument("--benchmark", required=True, choices=("RMBench", "rmbench"))
     parser.add_argument("--data-root", required=True, help="Root used by the replay index source_path values.")
     parser.add_argument("--index", required=True, help="Memory replay JSONL index path.")
     parser.add_argument("--output-root", required=True, help="Directory for manifest.json and shard .pt files.")

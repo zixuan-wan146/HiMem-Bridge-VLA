@@ -62,6 +62,7 @@ TRAINING_DEFAULTS: dict[str, Any] = {
     "loss_replan_steps": 8,
     "allow_short_burnin": True,
     "trajectory_window_stride": 1,
+    "shuffle_trajectory_windows": False,
     "max_vlm_tokens": None,
     "num_inference_timesteps": 15,
     "inference_tau_schedule": "midpoint",
@@ -70,6 +71,7 @@ TRAINING_DEFAULTS: dict[str, Any] = {
     "dropout": 0.0,
     "boundary_loss_weight": 1.0,
     "progress_loss_weight": 0.2,
+    "min_cuda_memory_gb": None,
 }
 
 
@@ -258,6 +260,11 @@ def validate_training_config(
             value = _as_float(config[key], f"--{key}")
             if value < 0:
                 raise ValueError(f"--{key} must be non-negative, got {value}")
+
+    if config.get("min_cuda_memory_gb") is not None:
+        value = _as_float(config["min_cuda_memory_gb"], "--min_cuda_memory_gb")
+        if value <= 0:
+            raise ValueError(f"--min_cuda_memory_gb must be positive, got {value}")
 
     dropout = _as_float(config.get("dropout", 0.0), "--dropout")
     if dropout > 1:

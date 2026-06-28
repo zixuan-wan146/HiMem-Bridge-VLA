@@ -40,6 +40,11 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--loss_replan_steps", type=int, default=argparse.SUPPRESS)
     parser.add_argument("--allow_short_burnin", action=argparse.BooleanOptionalAction, default=argparse.SUPPRESS)
     parser.add_argument("--trajectory_window_stride", type=int, default=argparse.SUPPRESS)
+    parser.add_argument(
+        "--shuffle_trajectory_windows",
+        action=argparse.BooleanOptionalAction,
+        default=argparse.SUPPRESS,
+    )
 
     parser.add_argument("--lr", type=float, default=argparse.SUPPRESS)
     parser.add_argument("--batch_size", type=int, default=argparse.SUPPRESS)
@@ -50,6 +55,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--grad_clip_norm", type=float, default=argparse.SUPPRESS)
     parser.add_argument("--dropout", type=float, default=argparse.SUPPRESS)
     parser.add_argument("--num_workers", type=int, default=argparse.SUPPRESS)
+    parser.add_argument("--min_cuda_memory_gb", type=float, default=argparse.SUPPRESS)
 
     parser.add_argument("--log_interval", type=int, default=argparse.SUPPRESS)
     parser.add_argument("--ckpt_interval", type=int, default=argparse.SUPPRESS)

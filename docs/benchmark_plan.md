@@ -29,7 +29,8 @@ $AUTODL_TMP/libero/datasets/libero_10       10 demo files, about 13G
 当前已经具备：
 
 ```text
-scripts/cache/build_libero_memory_replay_index.py
+scripts/cache/build_libero_episode_replay_index.py
+scripts/cache/build_libero_episode_feature_cache.py
 evaluations/legacy/libero/libero_client_4tasks.py
 configs/runtime/libero_profiles/smoke.env
 configs/runtime/libero_profiles/full_eval.env
@@ -44,17 +45,15 @@ scripts/report/report_libero_runs.py
 
 - eval：可以用现有 websocket server + LIBERO client 跑 smoke/full eval。
 - memory 后续验证：LIBERO 是双视角单臂，memory compression 默认 `n_m=1`。
-- memory replay：可以用 `scripts/cache/build_libero_memory_replay_index.py` 生成轻量 JSONL index，固定当前帧、短期历史帧、action chunk 范围和 mask。
-- frame replay：`src/himem_bridge_vla/dataset/memory_replay_frames.py` 可以根据 index row 回读当前图像、短期历史图像、state 和 future action chunk。
-- replay dataset：`src/himem_bridge_vla/dataset/memory_replay_dataset.py` 提供 PyTorch-compatible dataset 和 collate，输出当前图像、短期历史图像、state、future actions 和 mask。
-- replay token cache：`scripts/cache/build_memory_replay_token_cache.py` 可以把 replay dataset 中的图像预先编码成按 view 分组的 visual tower tokens，并可选保存 current VLM hidden-state layers，写成 shard + manifest。最终 direct bridge 训练使用 InternVL3 + `--include-vlm-hidden-states --hidden-state-layers 3 6 9 12`；测试和 smoke 可使用 `image_stats` encoder。
-- token cache dataset：`src/himem_bridge_vla/dataset/memory_token_cache.py` 提供 `MemoryTokenCacheDataset` 和 `collate_memory_token_cache_samples`，可以从 shard 回读 current visual tokens、可选 current hidden states、short visual tokens、state、future actions、`short_steps`、`short_mask` 和 `action_mask`。
+- episode replay：`scripts/cache/build_libero_episode_replay_index.py` 生成 episode-first JSON，每个 episode 保存 replan nodes 和所有必需视觉帧索引。
+- episode feature cache：`scripts/cache/build_libero_episode_feature_cache.py` 将 episode replay 物化成 `libero_episode_feature_cache`，保存 current visual tokens、short-memory tokens、current VLM hidden-state layers、`planner_vl_summary`、state、actions 和 node metadata。
+- Stage1 dataset：`EpisodeFeatureCacheTrajectoryDataset` 从 episode feature shard 回读整条 episode replan 序列，再由 `collate_direct_bridge_token_cache_windows` 组装按时间递推的 `trajectory_steps`。
 
 缺口：
 
 - 现有本机数据是常用 40-task VLA eval 子集，不是完整 LIBERO-100/130 task 全集。
-- memory replay 和 token cache 已经有可执行入口；progress-state planner warmup 将复用其中的图像、state、future action chunk 和 mask 数据协议。
-- low-level 图像是否每个执行 step 都用于训练，由 replay index 的 `stride`、`short_offsets` 和 token cache 生成命令共同决定。
+- 旧 LIBERO frame-level memory replay JSONL 和 `memory_replay_visual_token_cache` 入口已从 active path 删除，避免和 episode-level Stage1 cache 混用。
+- low-level 图像是否每个执行 step 都用于训练，由 episode replay index 的 `stride`、`short_offsets` 和 feature cache 生成命令共同决定。
 
 ## 2. LIBERO-Plus
 
@@ -184,7 +183,7 @@ endpose/right_endpose      [T, 7]
 
 ```text
 python scripts/eval/inspect_benchmarks.py --data-root "$AUTODL_TMP" --output run_outputs/benchmark_inventory.json --allow-missing
-python scripts/cache/build_libero_memory_replay_index.py --libero-root "$AUTODL_TMP/libero/datasets" --output run_outputs/libero_memory_replay.jsonl
+python scripts/cache/build_libero_episode_replay_index.py --libero-root "$AUTODL_TMP/libero/datasets" --suites libero_10 --output run_outputs/libero_10_episode_replay.json
 python scripts/cache/build_rmbench_norm_stats.py --rmbench-root "$AUTODL_TMP/benchmarks/RMBench" --output run_outputs/rmbench_norm_stats.json --metadata-output run_outputs/rmbench_norm_stats.metadata.json
 python scripts/cache/build_rmbench_memory_replay_index.py --rmbench-root "$AUTODL_TMP/benchmarks/RMBench" --output run_outputs/rmbench_memory_replay.jsonl
 python scripts/quality/validate_bridge_himem_configs.py
@@ -194,12 +193,15 @@ python -m pytest -q
 第二阶段补数据 adapter：
 
 ```bash
-python scripts/cache/build_memory_replay_token_cache.py \
-  --benchmark LIBERO \
-  --data-root "$AUTODL_TMP/libero/datasets" \
-  --index run_outputs/libero_memory_replay.jsonl \
-  --output-root "$AUTODL_TMP/token_caches/libero_memory_replay" \
-  --encoder internvl3
+python scripts/cache/build_libero_episode_feature_cache.py \
+  --episode-index run_outputs/libero_10_episode_replay.json \
+  --libero-root "$AUTODL_TMP/libero/datasets" \
+  --output-root "$AUTODL_TMP/token_caches/libero_10_episode_feature_internvl3_hidden_l3_6_9_12_stride16" \
+  --encoder internvl3 \
+  --include-vlm-hidden-states \
+  --hidden-state-layers 3 6 9 12 \
+  --storage-dtype bfloat16 \
+  --device cuda
 
 python scripts/cache/build_memory_replay_token_cache.py \
   --benchmark RMBench \
@@ -214,11 +216,13 @@ python scripts/cache/build_memory_replay_token_cache.py \
 ```python
 from torch.utils.data import DataLoader
 
-from himem_bridge_vla.dataset import MemoryTokenCacheDataset
-from himem_bridge_vla.dataset import collate_memory_token_cache_samples
+from himem_bridge_vla.dataset import EpisodeFeatureCacheTrajectoryDataset
+from himem_bridge_vla.dataset import collate_direct_bridge_token_cache_windows
 
-dataset = MemoryTokenCacheDataset("$AUTODL_TMP/token_caches/libero_memory_replay")
-loader = DataLoader(dataset, batch_size=8, collate_fn=collate_memory_token_cache_samples)
+dataset = EpisodeFeatureCacheTrajectoryDataset(
+    "$AUTODL_TMP/token_caches/libero_10_episode_feature_internvl3_hidden_l3_6_9_12_stride16"
+)
+loader = DataLoader(dataset, batch_size=1, collate_fn=collate_direct_bridge_token_cache_windows)
 ```
 
 第三阶段只保留 eval 计划检查：

@@ -78,6 +78,7 @@ def test_build_stage1_config_uses_active_profile_and_cli_override():
     assert config["batch_size"] == 2
     assert config["horizon"] == 32
     assert config["progress_planner_replan_stride"] == 16
+    assert config["shuffle_trajectory_windows"] is False
     assert config["num_inference_timesteps"] == 15
     assert config["progress_planner_checkpoint"]
 
@@ -87,6 +88,8 @@ def test_build_stage1_config_strict_mode_requires_cache_manifest():
         [
             "--config",
             "configs/training/stage1/libero/libero_10_direct_progress_w4.yaml",
+            "--dataset_config_path",
+            "local_data/token_caches/missing_stage1_test/manifest.json",
         ]
     )
 
@@ -115,10 +118,10 @@ def test_validate_stage1_cache_contract_checks_hidden_layers(tmp_path):
     manifest.write_text(
         """
 {
-  "format": "memory_replay_visual_token_cache",
+  "format": "libero_episode_feature_cache",
   "hidden_dim": 896,
   "hidden_state_layers": [3, 6],
-  "hidden_state_cache_entries": 1,
+  "node_count": 1,
   "planner_vl_summary": {"enabled": true, "source": "vlm_last_valid_token"},
   "normalization": {
     "robot_key": "libero",
@@ -140,7 +143,7 @@ def test_validate_stage1_cache_contract_checks_hidden_layers(tmp_path):
         validate_stage1_cache_contract(config, repo_root=tmp_path)
 
 
-def test_validate_stage1_cache_contract_checks_action_state_dims(tmp_path):
+def test_validate_stage1_cache_contract_rejects_legacy_visual_token_cache(tmp_path):
     manifest = tmp_path / "manifest.json"
     manifest.write_text(
         """
@@ -149,6 +152,27 @@ def test_validate_stage1_cache_contract_checks_action_state_dims(tmp_path):
   "hidden_dim": 896,
   "hidden_state_layers": [3, 6, 9, 12],
   "hidden_state_cache_entries": 1,
+  "planner_vl_summary": {"enabled": true, "source": "vlm_last_valid_token"}
+}
+""",
+        encoding="utf-8",
+    )
+    config = _minimal_stage1_config()
+    config.update({"dataset_config_path": "manifest.json", "per_action_dim": 7, "state_dim": 8})
+
+    with pytest.raises(ValueError, match="libero_episode_feature_cache"):
+        validate_stage1_cache_contract(config, repo_root=tmp_path)
+
+
+def test_validate_stage1_cache_contract_checks_action_state_dims(tmp_path):
+    manifest = tmp_path / "manifest.json"
+    manifest.write_text(
+        """
+{
+  "format": "libero_episode_feature_cache",
+  "hidden_dim": 896,
+  "hidden_state_layers": [3, 6, 9, 12],
+  "node_count": 1,
   "planner_vl_summary": {"enabled": true, "source": "vlm_last_valid_token"},
   "normalization": {
     "robot_key": "libero",
@@ -175,10 +199,10 @@ def test_validate_stage1_cache_contract_requires_planner_vl_summary(tmp_path):
     manifest.write_text(
         """
 {
-  "format": "memory_replay_visual_token_cache",
+  "format": "libero_episode_feature_cache",
   "hidden_dim": 896,
   "hidden_state_layers": [3, 6, 9, 12],
-  "hidden_state_cache_entries": 1,
+  "node_count": 1,
   "normalization": {
     "robot_key": "libero",
     "stats": {

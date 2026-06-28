@@ -35,8 +35,11 @@ from himem_bridge_vla.dataset.memory_replay_frames import MemoryReplayFrameReade
 from himem_bridge_vla.dataset.memory_replay_frames import MemoryReplayFrameSample
 from himem_bridge_vla.dataset.memory_replay_frames import ReplayFrame
 from himem_bridge_vla.dataset.memory_token_cache import DEFAULT_TOKEN_CACHE_SHARD_SIZE
+from himem_bridge_vla.dataset.memory_token_cache import EPISODE_FEATURE_CACHE_FORMAT
+from himem_bridge_vla.dataset.memory_token_cache import EPISODE_FEATURE_CACHE_VERSION
 from himem_bridge_vla.dataset.memory_token_cache import MEMORY_TOKEN_CACHE_FORMAT
 from himem_bridge_vla.dataset.memory_token_cache import MEMORY_TOKEN_CACHE_VERSION
+from himem_bridge_vla.dataset.memory_token_cache import EpisodeFeatureCacheTrajectoryDataset
 from himem_bridge_vla.dataset.memory_token_cache import ImageStatsVisualTokenEncoder
 from himem_bridge_vla.dataset.memory_token_cache import ImageStatsVLMHiddenStateEncoder
 from himem_bridge_vla.dataset.memory_token_cache import InternVL3VisualTokenEncoder
@@ -85,6 +88,8 @@ __all__ = [
     "DEFAULT_RMBENCH_ROBOT_KEY",
     "DEFAULT_RMBENCH_SETTING",
     "DEFAULT_TOKEN_CACHE_SHARD_SIZE",
+    "EPISODE_FEATURE_CACHE_FORMAT",
+    "EPISODE_FEATURE_CACHE_VERSION",
     "LIBERO_PROGRESS_WARMUP_FORMAT",
     "LIBERO_PROGRESS_WARMUP_VERSION",
     "MEMORY_TOKEN_CACHE_FORMAT",
@@ -95,6 +100,7 @@ __all__ = [
     "InternVL3VisualTokenEncoder",
     "InternVL3VLMHiddenStateEncoder",
     "InternVL3VLSummaryEncoder",
+    "EpisodeFeatureCacheTrajectoryDataset",
     "LiberoEpisodeReader",
     "LiberoFrame",
     "LiberoProgressWarmupBuildResult",

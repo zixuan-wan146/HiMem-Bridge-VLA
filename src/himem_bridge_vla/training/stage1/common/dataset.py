@@ -2,34 +2,45 @@ from __future__ import annotations
 
 import logging
 from functools import partial
+import json
 from pathlib import Path
 from typing import Any
 
-from himem_bridge_vla.dataset import MemoryTokenCacheTrajectoryDataset, collate_direct_bridge_token_cache_windows
+from himem_bridge_vla.dataset import EPISODE_FEATURE_CACHE_FORMAT
+from himem_bridge_vla.dataset import EpisodeFeatureCacheTrajectoryDataset
+from himem_bridge_vla.dataset import collate_direct_bridge_token_cache_windows
 from himem_bridge_vla.path_utils import display_project_path, project_path
 from himem_bridge_vla.reproducibility import build_torch_generator, seed_data_worker
 
 
-def prepare_stage1_dataset(config: dict[str, Any], *, repo_root: str | Path) -> MemoryTokenCacheTrajectoryDataset:
+def prepare_stage1_dataset(
+    config: dict[str, Any],
+    *,
+    repo_root: str | Path,
+) -> EpisodeFeatureCacheTrajectoryDataset:
     manifest_path = project_path(config.get("dataset_config_path"), repo_root, label="--dataset_config_path")
-    dataset = MemoryTokenCacheTrajectoryDataset(
+    manifest_format = _read_manifest_format(manifest_path)
+    if manifest_format != EPISODE_FEATURE_CACHE_FORMAT:
+        raise ValueError(
+            f"Stage1 LIBERO training requires {EPISODE_FEATURE_CACHE_FORMAT} manifest, got {manifest_format!r}. "
+            "Build it with scripts/cache/build_libero_episode_replay_index.py and "
+            "scripts/cache/build_libero_episode_feature_cache.py."
+        )
+    dataset = EpisodeFeatureCacheTrajectoryDataset(
         manifest_path,
-        burnin_replan_steps=int(config.get("burnin_replan_steps", 8)),
-        loss_replan_steps=int(config.get("loss_replan_steps", 8)),
-        allow_short_burnin=bool(config.get("allow_short_burnin", True)),
         action_horizon=int(config.get("horizon", 32)),
-        window_stride=int(config.get("trajectory_window_stride", 1)),
-        max_samples=config.get("max_samples_per_file"),
+        max_episodes=config.get("max_samples_per_file"),
     )
     logging.info(
-        "Loaded Stage1 trajectory token cache: windows=%s manifest=%s",
+        "Loaded Stage1 trajectory token cache: windows=%s format=%s manifest=%s",
         len(dataset),
+        manifest_format,
         display_project_path(manifest_path, repo_root),
     )
     return dataset
 
 
-def prepare_stage1_dataloader(dataset: MemoryTokenCacheTrajectoryDataset, config: dict[str, Any]):
+def prepare_stage1_dataloader(dataset: EpisodeFeatureCacheTrajectoryDataset, config: dict[str, Any]):
     try:
         from torch.utils.data import DataLoader
     except ModuleNotFoundError as exc:
@@ -38,6 +49,7 @@ def prepare_stage1_dataloader(dataset: MemoryTokenCacheTrajectoryDataset, config
     batch_size = int(config.get("batch_size", 4))
     num_workers = int(config.get("num_workers", 4))
     seed = int(config.get("seed", 42))
+    shuffle = bool(config.get("shuffle_trajectory_windows", False))
     if len(dataset) == 0:
         raise ValueError("Stage1 dataset is empty")
 
@@ -49,7 +61,7 @@ def prepare_stage1_dataloader(dataset: MemoryTokenCacheTrajectoryDataset, config
     dataloader = DataLoader(
         dataset,
         batch_size=batch_size,
-        shuffle=True,
+        shuffle=shuffle,
         num_workers=num_workers,
         pin_memory=True,
         persistent_workers=False,
@@ -62,5 +74,16 @@ def prepare_stage1_dataloader(dataset: MemoryTokenCacheTrajectoryDataset, config
         raise ValueError(
             f"Stage1 dataloader has no batches. Dataset size={len(dataset)}, batch_size={batch_size}, drop_last=True."
         )
-    logging.info("Initialized Stage1 dataloader: batch_size=%s num_workers=%s", batch_size, num_workers)
+    logging.info(
+        "Initialized Stage1 dataloader: batch_size=%s num_workers=%s shuffle_trajectory_windows=%s",
+        batch_size,
+        num_workers,
+        shuffle,
+    )
     return dataloader
+
+
+def _read_manifest_format(manifest_path: Path) -> str | None:
+    with manifest_path.open("r", encoding="utf-8") as handle:
+        payload = json.load(handle)
+    return None if payload.get("format") is None else str(payload["format"])

@@ -4,7 +4,7 @@ import logging
 import os
 from contextlib import nullcontext
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from himem_bridge_vla.experiment_config import resolve_experiment_config
 from himem_bridge_vla.reproducibility import set_global_seed, write_experiment_snapshot
@@ -18,6 +18,8 @@ from himem_bridge_vla.training.stage1.common.dataset import prepare_stage1_datal
 from himem_bridge_vla.training.stage1.common.loss import stage1_flow_matching_loss
 from himem_bridge_vla.training.stage1.libero.validators import enforce_stage1_contract
 from himem_bridge_vla.training_config import resolve_training_config_paths, validate_training_config
+from himem_bridge_vla.utils.cuda_memory import cuda_memory_stats
+from himem_bridge_vla.utils.cuda_memory import reserve_cuda_memory_floor
 
 
 def train_stage1(config: dict[str, Any], *, repo_root: str | Path) -> None:
@@ -67,7 +69,7 @@ def train_stage1(config: dict[str, Any], *, repo_root: str | Path) -> None:
         base_lr=lr,
         lr_groups=config.get("lr_groups") or {},
     )
-    optimizer = AdamW(param_groups, lr=lr)
+    optimizer = AdamW(param_groups, lr=lr, foreach=False)
     if accelerator.is_main_process:
         logging.info("Optimizer=AdamW base_lr=%s weight_decay=%s", lr, weight_decay)
         for index, group in enumerate(param_groups):
@@ -83,6 +85,7 @@ def train_stage1(config: dict[str, Any], *, repo_root: str | Path) -> None:
     model, optimizer, dataloader = accelerator.prepare(model, optimizer, dataloader)
     model_engine = model
     unwrapped_model = unwrap_training_model(accelerator, model)
+    memory_floor = None
 
     max_steps = int(config.get("max_steps", 10000))
     warmup_steps = int(config.get("warmup_steps", 1000))
@@ -129,6 +132,20 @@ def train_stage1(config: dict[str, Any], *, repo_root: str | Path) -> None:
     elif accelerator.is_main_process:
         logging.info("Starting fresh Stage1 training")
 
+    if accelerator.is_main_process and config.get("min_cuda_memory_gb") is not None:
+        memory_floor = reserve_cuda_memory_floor(
+            torch,
+            target_gb=float(config["min_cuda_memory_gb"]),
+            device=accelerator.device,
+        )
+        stats = cuda_memory_stats(torch, accelerator.device)
+        logging.info(
+            "Stage1 CUDA memory floor active: target=%.2f GiB used=%.2f GiB floor_reserved=%.2f GiB",
+            float(config["min_cuda_memory_gb"]),
+            float(stats["used_gb"]),
+            float(memory_floor.reserved_gb),
+        )
+
     log_interval = int(config.get("log_interval", 10))
     ckpt_interval = int(config.get("ckpt_interval", 5000))
     best_ckpt_enabled = int(config.get("best_ckpt_interval", 1000)) != 0
@@ -143,6 +160,7 @@ def train_stage1(config: dict[str, Any], *, repo_root: str | Path) -> None:
                 break
             validate_stage1_window_batch(batch)
 
+            optimizer.zero_grad(set_to_none=True)
             loss, extra_metrics, last_tensors = _run_trajectory_window_batch(
                 torch=torch,
                 model=model,
@@ -152,15 +170,24 @@ def train_stage1(config: dict[str, Any], *, repo_root: str | Path) -> None:
                 accelerator=accelerator,
                 bridge_enabled=bridge_enabled,
                 step=step,
+                backward_fn=accelerator.backward,
             )
             if not _check_numerical_stability(torch, step, loss=loss, **last_tensors):
                 raise FloatingPointError(f"Non-finite tensor detected at Stage1 step {step}")
             last_tensors.clear()
 
-            optimizer.zero_grad(set_to_none=True)
-            accelerator.backward(loss)
             total_norm, clipped_norm = get_and_clip_grad_norm(torch, accelerator, model, loss, max_norm)
+            if memory_floor is not None:
+                memory_floor.trim_to_target()
             optimizer.step()
+            if memory_floor is not None:
+                stats = memory_floor.trim_to_target()
+                if accelerator.is_main_process:
+                    logging.debug(
+                        "Stage1 CUDA memory floor trim: used=%.2f GiB floor_reserved=%.2f GiB",
+                        float(stats["used_gb"]),
+                        float(memory_floor.reserved_gb),
+                    )
             scheduler.step()
 
             if step % log_interval == 0:
@@ -312,6 +339,17 @@ def _scatter_progress_state(progress_state: Any, batch_indices: Any, updated_sta
     return output
 
 
+def _detach_progress_state(progress_state: Any) -> Any:
+    from himem_bridge_vla.model.planner import ProgressState
+
+    if isinstance(progress_state, ProgressState):
+        return ProgressState(
+            completed_events=progress_state.completed_events.detach(),
+            current_stage=progress_state.current_stage.detach(),
+        )
+    return progress_state.detach()
+
+
 def _run_trajectory_window_batch(
     *,
     torch: Any,
@@ -322,6 +360,7 @@ def _run_trajectory_window_batch(
     accelerator: Any,
     bridge_enabled: bool,
     step: int,
+    backward_fn: Callable[[Any], None] | None = None,
 ) -> tuple[Any, dict[str, float], dict[str, Any]]:
     if unwrapped_model.progress_state_planner is None:
         raise ValueError("Stage1 trajectory training requires progress_state_planner")
@@ -334,6 +373,12 @@ def _run_trajectory_window_batch(
     action_loss_values = []
     loss_rows = 0
     last_tensors: dict[str, Any] = {}
+    loss_step_count = sum(
+        int(bool(step_batch["loss_mask"].bool().any().item()))
+        for step_batch in batch["trajectory_steps"]
+    )
+    if loss_step_count <= 0:
+        raise ValueError("Stage1 trajectory window batch produced no loss terms")
 
     for step_batch in batch["trajectory_steps"]:
         batch_indices = step_batch["batch_indices"].to(device=device)
@@ -378,6 +423,7 @@ def _run_trajectory_window_batch(
         if planner_output is None:
             raise RuntimeError("progress_state_planner did not produce an output during Stage1 trajectory training")
         progress_state = _scatter_progress_state(progress_state, batch_indices, planner_output.progress_state)
+        progress_state = _detach_progress_state(progress_state)
 
         if bool(loss_mask.any().item()):
             if action_mask[loss_mask].sum() == 0:
@@ -388,7 +434,11 @@ def _run_trajectory_window_batch(
                 actions_gt=actions_gt[loss_mask],
                 action_mask=action_mask[loss_mask],
             )
-            loss_terms.append(action_loss)
+            if backward_fn is not None:
+                backward_fn(action_loss / float(loss_step_count))
+                loss_terms.append(action_loss.detach())
+            else:
+                loss_terms.append(action_loss)
             action_loss_values.append(float(action_loss.detach().cpu().item()))
             loss_rows += int(loss_mask.sum().item())
 

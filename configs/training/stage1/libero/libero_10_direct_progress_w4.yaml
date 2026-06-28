@@ -6,7 +6,7 @@ bridge_himem_config: configs/experiments/bridge_himem/direct_progress_w4.yaml
 load_vlm: false
 
 dataset_type: memory_token_cache
-dataset_config_path: local_data/token_caches/libero_10_memory_replay_internvl3_hidden_l3_6_9_12_s16_dedup_parts4/manifest.json
+dataset_config_path: local_data/token_caches/libero_10_episode_feature_internvl3_hidden_l3_6_9_12_stride16/manifest.json
 dataset_config_base_dir: .
 cache_dir: local_data/cache/himem_bridge_vla/libero/stage1/libero_10
 
@@ -29,6 +29,7 @@ burnin_replan_steps: 8
 loss_replan_steps: 8
 allow_short_burnin: true
 trajectory_window_stride: 1
+shuffle_trajectory_windows: false
 
 finetune_vlm: false
 finetune_action_head: true

@@ -123,14 +123,16 @@ executed_action_mask: [16]
 target_intent: [128]
 ```
 
-Small direct-bridge smoke cache:
+Current LIBERO Stage1 episode feature cache:
 
 ```text
-LIBERO image_stats H896 smoke:
-  cache: $AUTODL_TMP/token_caches/libero_memory_replay_image_stats_h896_smoke
-  format: memory_replay_visual_token_cache
-  sample_count: 2
-  purpose: checkpoint-conditioned direct bridge H32 training smoke only
+LIBERO episode feature InternVL3 cache:
+  cache: $AUTODL_TMP/HiMem-Bridge-VLA/local_data/token_caches/libero_10_episode_feature_internvl3_hidden_l3_6_9_12_stride16
+  format: libero_episode_feature_cache
+  episode_count: 500
+  node_count: 7891
+  shard_count: 125
+  purpose: active LIBERO Stage1 direct bridge training
 ```
 
 ## Current Metrics

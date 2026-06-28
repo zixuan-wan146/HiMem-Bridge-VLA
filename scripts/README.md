@@ -24,24 +24,26 @@ Scripts are grouped by responsibility. Prefer these entry points over hand-writt
 
 - `download_rmbench_tasks.py`: download the official nine RMBench `demo_clean` task folders.
 - `inspect_benchmarks.py`: inspect local LIBERO, LIBERO-Plus, and RMBench assets and emit a JSON inventory.
-- `build_libero_memory_replay_index.py`: write a deterministic LIBERO JSONL index for current frames, short-memory history, and future action chunks. The index keeps `long_capacity=0`; progress-state long memory is not stored in replay rows.
+- `build_libero_episode_replay_index.py`: write an episode-first LIBERO JSON index. Each episode stores replan nodes plus the complete set of required visual frame indices, including short-memory frames such as `t-8` that are not themselves replan nodes.
+- `build_libero_episode_feature_cache.py`: materialize an episode-level processed feature cache from the episode-first index. It stores visual tokens, current VLM hidden-state layers, planner summaries, states, actions, and node metadata; it does not duplicate raw image arrays from HDF5.
 - `build_rmbench_norm_stats.py`: compute RMBench min/max stats for state normalization and action denormalization.
 - `build_rmbench_memory_replay_index.py`: write a deterministic RMBench JSONL index for current frames, short-memory history, and future action chunks. The index keeps `long_capacity=0`; progress-state long memory is not stored in replay rows.
-- `build_memory_replay_token_cache.py`: encode replay-index frames into replay-token shards plus a manifest. Use `--encoder internvl3 --include-vlm-hidden-states --hidden-state-layers 3 6 9 12` for final direct bridge training caches; use `--encoder image_stats` only for IO smoke tests.
+- `build_memory_replay_token_cache.py`: encode RMBench replay-index frames into replay-token shards plus a manifest. LIBERO Stage1 uses `build_libero_episode_feature_cache.py` instead.
 - `plan_rmbench_eval.py`: inspect RMBench eval prerequisites and write direct/socket eval commands for the official `script/eval_policy.py` stack.
 - `install_rmbench_policy_adapter.py`: install the checked-in `HiMemBridgeVLA` policy adapter into an official RMBench checkout.
 - `run_rmbench_eval.sh`: reproducible RMBench eval wrapper. It installs the adapter, writes a run manifest, writes a command plan, then runs official direct eval task by task.
 
-Token caches are read with `MemoryTokenCacheDataset` and `collate_memory_token_cache_samples`. They expose current visual tokens, optional current VLM hidden-state layers, recent short visual tokens, `short_steps`, `short_mask`, state, and future action chunks for IO checks and direct bridge training.
+RMBench replay-token caches are read with `MemoryTokenCacheDataset` and `collate_memory_token_cache_samples`. They expose current visual tokens, optional current VLM hidden-state layers, recent short visual tokens, `short_steps`, `short_mask`, state, and future action chunks for IO checks.
 
 There are two different cache families:
 
 - `*_progress_vl_embedding_warmup_cache`: pooled VL embedding windows for progress-state planner warm-up.
-- `memory_replay_visual_token_cache`: replay-token shards for short memory and direct bridge-attn action-head training. Final direct bridge caches include `current_hidden_states` and `planner_vl_summary`.
+- `libero_episode_feature_cache`: active LIBERO Stage1 cache. It stores episode-level nodes, current hidden states, planner summaries, short-memory visual tokens, states, and actions.
+- `memory_replay_visual_token_cache`: replay-token shards retained for RMBench and low-level IO smoke checks.
 
 Do not pass progress warm-up caches into the direct bridge token-cache smoke; the script validates the manifest format and will reject them.
 
-For active Stage1 direct bridge-attn training from cached replay tokens, use `scripts/train/stage1/libero.py` or `python -m himem_bridge_vla.training.stage1.libero.cli`. The Stage1 loader uses trajectory windows from `MemoryTokenCacheTrajectoryDataset`, not random frame-level batches, so the frozen progress planner state is advanced chronologically through burn-in and loss windows.
+For active Stage1 direct bridge-attn training, use `scripts/train/stage1/libero.py` or `python -m himem_bridge_vla.training.stage1.libero.cli`. The Stage1 loader requires `libero_episode_feature_cache` and advances the frozen progress planner state chronologically through each episode's replan nodes.
 
 Example:
 
@@ -51,9 +53,10 @@ python scripts/eval/inspect_benchmarks.py \
   --output run_outputs/benchmark_inventory.json \
   --allow-missing
 
-python scripts/cache/build_libero_memory_replay_index.py \
+python scripts/cache/build_libero_episode_replay_index.py \
   --libero-root "$AUTODL_TMP/libero/datasets" \
-  --output run_outputs/libero_memory_replay.jsonl
+  --suites libero_10 \
+  --output run_outputs/libero_10_episode_replay.json
 
 python scripts/cache/build_rmbench_norm_stats.py \
   --rmbench-root "$AUTODL_TMP/benchmarks/RMBench" \
@@ -64,19 +67,10 @@ python scripts/cache/build_rmbench_memory_replay_index.py \
   --rmbench-root "$AUTODL_TMP/benchmarks/RMBench" \
   --output run_outputs/rmbench_memory_replay.jsonl
 
-python scripts/cache/build_memory_replay_token_cache.py \
-  --benchmark LIBERO \
-  --data-root "$AUTODL_TMP/libero/datasets" \
-  --index run_outputs/libero_memory_replay.jsonl \
-  --output-root "$AUTODL_TMP/token_caches/libero_memory_replay" \
-  --encoder image_stats \
-  --max-samples 2
-
-python scripts/cache/build_memory_replay_token_cache.py \
-  --benchmark LIBERO \
-  --data-root "$AUTODL_TMP/libero/datasets" \
-  --index run_outputs/libero_memory_replay.jsonl \
-  --output-root "$AUTODL_TMP/token_caches/libero_memory_replay_internvl3_hidden_l3_6_9_12" \
+python scripts/cache/build_libero_episode_feature_cache.py \
+  --episode-index run_outputs/libero_10_episode_replay.json \
+  --libero-root "$AUTODL_TMP/libero/datasets" \
+  --output-root "$AUTODL_TMP/token_caches/libero_10_episode_feature_internvl3_hidden_l3_6_9_12_stride16" \
   --encoder internvl3 \
   --include-vlm-hidden-states \
   --hidden-state-layers 3 6 9 12 \
@@ -84,35 +78,14 @@ python scripts/cache/build_memory_replay_token_cache.py \
   --device cuda
 
 python scripts/cache/build_memory_replay_token_cache.py \
-  --benchmark LIBERO \
-  --data-root "$AUTODL_TMP/libero/datasets" \
-  --index run_outputs/libero_memory_replay.jsonl \
-  --output-root "$AUTODL_TMP/token_caches/libero_memory_replay_image_stats_hidden_smoke" \
+  --benchmark RMBench \
+  --data-root "$AUTODL_TMP/benchmarks/RMBench" \
+  --index run_outputs/rmbench_memory_replay.jsonl \
+  --output-root "$AUTODL_TMP/token_caches/rmbench_memory_replay_image_stats_smoke" \
   --encoder image_stats \
-  --image-stats-hidden-dim 896 \
-  --image-stats-tokens-per-view 32 \
-  --include-vlm-hidden-states \
-  --hidden-state-layers 3 6 9 12 \
   --max-samples 2 \
   --max-samples-per-shard 2 \
   --storage-dtype float32
-
-python scripts/quality/smoke_direct_bridge_token_cache_training.py \
-  --preset auto \
-  --manifest "$AUTODL_TMP/token_caches/libero_memory_replay" \
-  --device cpu \
-  --steps 1 \
-  --batch-size 1
-
-python scripts/quality/smoke_direct_bridge_token_cache_training.py \
-  --preset final \
-  --manifest "$AUTODL_TMP/token_caches/libero_memory_replay_image_stats_hidden_smoke" \
-  --device auto \
-  --steps 1 \
-  --batch-size 1 \
-  --action-horizon 32 \
-  --memory-entry-tokens 16 \
-  --progress-planner-checkpoint "$AUTODL_TMP/runs/progress_warmup/libero_progress_state_planner_h32_r16_w4_bs12800_epval_v1/best.pt"
 
 python scripts/quality/smoke_direct_bridge_inference.py \
   --preset final \

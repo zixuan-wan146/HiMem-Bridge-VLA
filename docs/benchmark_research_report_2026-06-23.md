@@ -71,7 +71,8 @@ $AUTODL_TMP/libero/datasets/libero_100      missing
 当前已经具备的工程入口：
 
 ```text
-scripts/cache/build_libero_memory_replay_index.py
+scripts/cache/build_libero_episode_replay_index.py
+scripts/cache/build_libero_episode_feature_cache.py
 himem_bridge_vla/dataset/memory_replay_frames.py
 himem_bridge_vla/dataset/memory_replay_dataset.py
 scripts/cache/build_memory_replay_token_cache.py

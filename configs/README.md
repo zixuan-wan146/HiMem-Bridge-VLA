@@ -57,7 +57,7 @@ training/stage1/libero/libero_10_direct_progress_w4.yaml
 This template expects a repo-local symlink `local_data -> $AUTODL_TMP` on the remote server. The resolved cache manifest is:
 
 ```text
-local_data/token_caches/libero_10_memory_replay_internvl3_hidden_l3_6_9_12_s16_dedup_parts4/manifest.json
+local_data/token_caches/libero_10_episode_feature_internvl3_hidden_l3_6_9_12_stride16/manifest.json
 ```
 
 Distributed training configs are intentionally absent. The active training path is single-card only.

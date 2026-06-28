@@ -5,6 +5,7 @@ from collections import defaultdict
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 import json
+import pickle
 from pathlib import Path
 from typing import Any, Protocol
 
@@ -14,6 +15,8 @@ from PIL import Image
 from himem_bridge_vla.dataset.memory_replay_dataset import MemoryReplayFrameDataset
 MEMORY_TOKEN_CACHE_FORMAT = "memory_replay_visual_token_cache"
 MEMORY_TOKEN_CACHE_VERSION = 1
+EPISODE_FEATURE_CACHE_FORMAT = "libero_episode_feature_cache"
+EPISODE_FEATURE_CACHE_VERSION = 1
 DEFAULT_TOKEN_CACHE_SHARD_SIZE = 1024
 
 
@@ -25,6 +28,9 @@ class VisualTokenEncoder(Protocol):
     tokens_per_view: int | None
 
     def encode_image(self, image: Image.Image) -> Any:
+        ...
+
+    def encode_images(self, images: Sequence[Image.Image]) -> Sequence[Any]:
         ...
 
 
@@ -107,6 +113,9 @@ class ImageStatsVisualTokenEncoder:
         )
         return torch.tensor(values, dtype=torch.float32)
 
+    def encode_images(self, images: Sequence[Image.Image]) -> list[Any]:
+        return [self.encode_image(image) for image in images]
+
 
 class ImageStatsVLMHiddenStateEncoder:
     """Deterministic hidden-state stand-in for cache IO tests."""
@@ -188,6 +197,29 @@ class InternVL3VisualTokenEncoder:
             )
         return tokens
 
+    def encode_images(self, images: Sequence[Image.Image]) -> list[Any]:
+        torch = _require_torch()
+        images = list(images)
+        if not images:
+            return []
+        with torch.no_grad():
+            pixel_values, num_tiles_list = self.embedder._preprocess_images(images)
+            tokens = self.embedder.model.extract_feature(pixel_values)
+        token_tensor = torch.as_tensor(tokens)
+        encoded: list[Any] = []
+        cursor = 0
+        for tile_count in num_tiles_list:
+            tile_count = int(tile_count)
+            image_tokens = token_tensor[cursor : cursor + tile_count]
+            encoded.append(flatten_visual_tokens(image_tokens).to(dtype=self.storage_dtype).cpu())
+            cursor += tile_count
+        if cursor != int(token_tensor.shape[0]):
+            raise ValueError(
+                f"InternVL3 visual batch split consumed {cursor} tiles, "
+                f"but encoder returned {int(token_tensor.shape[0])}"
+            )
+        return encoded
+
 
 class InternVL3VLMHiddenStateEncoder:
     """InternVL3 language-model hidden-state encoder for current replay observations."""
@@ -261,6 +293,12 @@ def build_memory_replay_token_cache(
     storage_dtype: str = "bfloat16",
     manifest_extra: Mapping[str, Any] | None = None,
 ) -> TokenCacheBuildResult:
+    if str(benchmark).upper() == "LIBERO":
+        raise ValueError(
+            "LIBERO Stage1 no longer uses memory_replay_visual_token_cache. "
+            "Build the active cache with build_libero_episode_replay_index.py followed by "
+            "build_libero_episode_feature_cache.py."
+        )
     max_samples_per_shard = int(max_samples_per_shard)
     if max_samples_per_shard <= 0:
         raise ValueError("max_samples_per_shard must be positive")
@@ -486,8 +524,16 @@ def encode_images_by_view(
     storage_dtype: Any,
 ) -> dict[str, Any]:
     tokens_by_view = {}
-    for view_name, image in images_by_view.items():
-        tokens = encoder.encode_image(image)
+    items = list(images_by_view.items())
+    if hasattr(encoder, "encode_images"):
+        encoded_tokens = list(encoder.encode_images([image for _view_name, image in items]))
+        if len(encoded_tokens) != len(items):
+            raise ValueError(
+                f"visual encoder returned {len(encoded_tokens)} images for {len(items)} input images"
+            )
+    else:
+        encoded_tokens = [encoder.encode_image(image) for _view_name, image in items]
+    for (view_name, _image), tokens in zip(items, encoded_tokens, strict=True):
         tokens_by_view[str(view_name)] = ensure_rank2_tokens(tokens, storage_dtype=storage_dtype)
     return tokens_by_view
 
@@ -870,6 +916,151 @@ class MemoryTokenCacheTrajectoryDataset:
                     }
                 )
         return windows
+
+
+class EpisodeFeatureCacheTrajectoryDataset:
+    """Episode-level trajectory view over processed LIBERO feature cache shards."""
+
+    def __init__(
+        self,
+        manifest_path: str | Path,
+        *,
+        action_horizon: int = 32,
+        max_episodes: int | None = None,
+    ) -> None:
+        self.manifest_path = resolve_token_cache_manifest_path(manifest_path)
+        self.manifest = read_token_cache_manifest(self.manifest_path)
+        _validate_episode_feature_cache_manifest(self.manifest, self.manifest_path)
+        self.output_root = self.manifest_path.parent
+        self.shards = tuple(_resolve_episode_feature_shards(self.manifest, self.output_root))
+        self.shard_end_indices = tuple(shard.end_index for shard in self.shards)
+        self.normalization = _parse_token_cache_normalization(self.manifest)
+        self.arm2stats_dict = None if self.normalization is None else dict(self.normalization["stats"])
+        self.action_horizon = int(action_horizon)
+        if self.action_horizon <= 0:
+            raise ValueError("action_horizon must be positive")
+
+        episode_count = int(self.manifest["episode_count"])
+        if max_episodes is not None:
+            if int(max_episodes) <= 0:
+                raise ValueError("max_episodes must be positive when provided")
+            episode_count = min(episode_count, int(max_episodes))
+        self.episode_count = episode_count
+        self.config = TokenCacheDatasetConfig(
+            manifest_path=self.manifest_path,
+            output_root=self.output_root,
+            benchmark=str(self.manifest["benchmark"]),
+            sample_count=self.episode_count,
+            hidden_dim=int(self.manifest["hidden_dim"]),
+            storage_dtype=str(self.manifest["storage_dtype"]),
+        )
+        self._loaded_shard_index: int | None = None
+        self._loaded_shard_episodes: list[dict[str, Any]] | None = None
+
+    def __len__(self) -> int:
+        return self.episode_count
+
+    def __getitem__(self, index: int) -> dict[str, Any]:
+        index = int(index)
+        if index < 0:
+            index += self.episode_count
+        if index < 0 or index >= self.episode_count:
+            raise IndexError(index)
+        shard_index = bisect_right(self.shard_end_indices, index)
+        if shard_index >= len(self.shards):
+            raise IndexError(index)
+        shard = self.shards[shard_index]
+        episodes = self._load_shard_episodes(shard_index)
+        local_index = index - shard.start_index
+        episode = episodes[local_index]
+        samples = [
+            self._node_to_sample(episode, node, sample_index=index * 100000 + node_index)
+            for node_index, node in enumerate(episode["nodes"])
+        ]
+        loss_mask = [
+            int(node["action_valid_count"]) >= self.action_horizon
+            for node in episode["nodes"]
+        ]
+        if not any(loss_mask):
+            raise ValueError(f"episode {episode.get('episode_id')} has no full-horizon Stage1 loss nodes")
+        return {
+            "samples": samples,
+            "loss_mask": loss_mask,
+            "episode_id": str(episode["episode_id"]),
+            "start_step": int(episode["nodes"][0]["current_step"]),
+        }
+
+    def _load_shard_episodes(self, shard_index: int) -> list[dict[str, Any]]:
+        if self._loaded_shard_index == shard_index and self._loaded_shard_episodes is not None:
+            return self._loaded_shard_episodes
+        shard = self.shards[shard_index]
+        payload = _torch_load(shard.path)
+        if payload.get("format") != EPISODE_FEATURE_CACHE_FORMAT:
+            raise ValueError(f"invalid episode feature cache shard format in {shard.path}")
+        episodes = list(payload.get("episodes", []))
+        if len(episodes) != shard.sample_count:
+            raise ValueError(
+                f"shard {shard.path} manifest episode_count={shard.sample_count} "
+                f"but file has {len(episodes)} episodes"
+            )
+        self._loaded_shard_index = shard_index
+        self._loaded_shard_episodes = episodes
+        return episodes
+
+    def _node_to_sample(
+        self,
+        episode: Mapping[str, Any],
+        node: Mapping[str, Any],
+        *,
+        sample_index: int,
+    ) -> dict[str, Any]:
+        torch = _require_torch()
+        current_step = int(node["current_step"])
+        actions = torch.as_tensor(episode["actions"], dtype=torch.float32).cpu()
+        visual_tokens_by_step = episode["visual_tokens_by_step"]
+        state_by_step = episode["state_by_step"]
+        current_features_by_step = episode["current_features_by_step"]
+
+        short_steps = [None if step is None else int(step) for step in node.get("short_visual_steps", [])]
+        short_mask = [bool(value) for value in node.get("short_mask", [])]
+        short_tokens = tuple(
+            None
+            if step is None or index >= len(short_mask) or not short_mask[index]
+            else _mapping_get_step(visual_tokens_by_step, int(step), label="visual_tokens_by_step")
+            for index, step in enumerate(short_steps)
+        )
+        executed_start, executed_end = [int(value) for value in node["executed_action_range"]]
+        executed_actions, executed_action_mask = _pad_executed_actions(
+            actions[executed_start:executed_end],
+            valid_count=int(node["executed_action_valid_count"]),
+            action_dim=int(actions.shape[-1]),
+            target_length=max(1, executed_end - executed_start, int(self.manifest["source_executed_action_stride"])),
+        )
+        future_start, future_end = [int(value) for value in node["future_action_range"]]
+        features = _mapping_get_step(current_features_by_step, current_step, label="current_features_by_step")
+        sample = {
+            "sample_index": int(sample_index),
+            "benchmark": str(self.manifest.get("benchmark", "LIBERO")),
+            "episode_id": str(episode["episode_id"]),
+            "prompt": str(episode.get("prompt", "")),
+            "current_step": current_step,
+            "current_tokens_by_view": _mapping_get_step(
+                visual_tokens_by_step,
+                current_step,
+                label="visual_tokens_by_step",
+            ),
+            "current_state": _mapping_get_step(state_by_step, current_step, label="state_by_step"),
+            "short_tokens_by_view": short_tokens,
+            "short_steps": [-1 if step is None else int(step) for step in short_steps],
+            "short_mask": short_mask,
+            "executed_actions": executed_actions,
+            "executed_action_mask": executed_action_mask,
+            "future_actions": actions[future_start:future_end].contiguous(),
+            "action_valid_count": int(node["action_valid_count"]),
+            "current_hidden_states": tuple(features["hidden_states"]),
+            "planner_vl_summary": features["planner_vl_summary"],
+        }
+        return _apply_token_cache_normalization(normalize_token_cache_sample(sample), self.normalization)
 
 
 def collate_direct_bridge_token_cache_windows(
@@ -1304,6 +1495,26 @@ def _validate_token_cache_manifest(manifest: Mapping[str, Any], manifest_path: P
         raise ValueError(f"token cache manifest has no shards: {manifest_path}")
 
 
+def _validate_episode_feature_cache_manifest(manifest: Mapping[str, Any], manifest_path: Path) -> None:
+    if manifest.get("format") != EPISODE_FEATURE_CACHE_FORMAT:
+        raise ValueError(f"invalid episode feature cache format in {manifest_path}: {manifest.get('format')!r}")
+    if int(manifest.get("version", -1)) != EPISODE_FEATURE_CACHE_VERSION:
+        raise ValueError(f"unsupported episode feature cache version in {manifest_path}: {manifest.get('version')!r}")
+    if str(manifest.get("benchmark", "")).upper() != "LIBERO":
+        raise ValueError(f"episode feature cache currently supports LIBERO only: {manifest.get('benchmark')!r}")
+    if int(manifest.get("episode_count", -1)) < 0:
+        raise ValueError(f"episode feature cache manifest has invalid episode_count: {manifest.get('episode_count')!r}")
+    if int(manifest.get("node_count", -1)) < 0:
+        raise ValueError(f"episode feature cache manifest has invalid node_count: {manifest.get('node_count')!r}")
+    if int(manifest.get("hidden_dim", 0)) <= 0:
+        raise ValueError(f"episode feature cache manifest has invalid hidden_dim: {manifest.get('hidden_dim')!r}")
+    if int(manifest.get("source_executed_action_stride", 0)) <= 0:
+        raise ValueError("episode feature cache manifest must include source_executed_action_stride")
+    shards = manifest.get("shards")
+    if not isinstance(shards, list) or not shards:
+        raise ValueError(f"episode feature cache manifest has no shards: {manifest_path}")
+
+
 def _resolve_manifest_shards(manifest: Mapping[str, Any], output_root: Path) -> list[TokenCacheShard]:
     shards: list[TokenCacheShard] = []
     expected_start = 0
@@ -1327,6 +1538,64 @@ def _resolve_manifest_shards(manifest: Mapping[str, Any], output_root: Path) -> 
     if expected_start != int(manifest["sample_count"]):
         raise ValueError(f"manifest sample_count={manifest['sample_count']} but shards end at {expected_start}")
     return shards
+
+
+def _resolve_episode_feature_shards(manifest: Mapping[str, Any], output_root: Path) -> list[TokenCacheShard]:
+    shards: list[TokenCacheShard] = []
+    expected_start = 0
+    for raw_shard in manifest["shards"]:
+        shard = TokenCacheShard(
+            path=output_root / str(raw_shard["path"]),
+            sample_count=int(raw_shard["episode_count"]),
+            start_index=int(raw_shard["start_index"]),
+            end_index=int(raw_shard["end_index"]),
+        )
+        if shard.start_index != expected_start:
+            raise ValueError(
+                f"non-contiguous episode feature shard starts at {shard.start_index}, expected {expected_start}"
+            )
+        if shard.end_index - shard.start_index != shard.sample_count:
+            raise ValueError(f"episode feature shard has inconsistent index range: {shard}")
+        if not shard.path.exists():
+            raise FileNotFoundError(f"episode feature shard does not exist: {shard.path}")
+        shards.append(shard)
+        expected_start = shard.end_index
+    if expected_start != int(manifest["episode_count"]):
+        raise ValueError(f"manifest episode_count={manifest['episode_count']} but shards end at {expected_start}")
+    return shards
+
+
+def _mapping_get_step(mapping: Mapping[Any, Any], step: int, *, label: str) -> Any:
+    if step in mapping:
+        return mapping[step]
+    text_step = str(step)
+    if text_step in mapping:
+        return mapping[text_step]
+    raise KeyError(f"{label} missing step {step}")
+
+
+def _pad_executed_actions(
+    actions: Any,
+    *,
+    valid_count: int,
+    action_dim: int,
+    target_length: int,
+) -> tuple[Any, Any]:
+    torch = _require_torch()
+    target_length = int(target_length)
+    if target_length <= 0:
+        raise ValueError("target_length must be positive")
+    action_dim = int(action_dim)
+    if action_dim <= 0:
+        raise ValueError("action_dim must be positive")
+    tensor = torch.as_tensor(actions, dtype=torch.float32).reshape(-1, action_dim).cpu()
+    valid = min(max(int(valid_count), 0), int(tensor.shape[0]), target_length)
+    output = torch.zeros(target_length, action_dim, dtype=torch.float32)
+    mask = torch.zeros(target_length, dtype=torch.bool)
+    if valid > 0:
+        output[-valid:] = tensor[-valid:]
+        mask[-valid:] = True
+    return output, mask
 
 
 def _pad_future_actions(actions: Sequence[Any]) -> tuple[Any, Any]:
@@ -1455,5 +1724,5 @@ def _torch_load(path: str | Path) -> Any:
     torch = _require_torch()
     try:
         return torch.load(path, weights_only=True)
-    except TypeError:
-        return torch.load(path)
+    except (TypeError, pickle.UnpicklingError, RuntimeError):
+        return torch.load(path, weights_only=False)

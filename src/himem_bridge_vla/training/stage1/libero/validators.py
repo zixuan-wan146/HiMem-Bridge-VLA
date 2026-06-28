@@ -7,7 +7,7 @@ from typing import Any
 from himem_bridge_vla.path_utils import project_path
 
 
-MEMORY_TOKEN_CACHE_FORMAT = "memory_replay_visual_token_cache"
+EPISODE_FEATURE_CACHE_FORMAT = "libero_episode_feature_cache"
 REQUIRED_HIDDEN_STATE_LAYERS = (3, 6, 9, 12)
 DEFAULT_STAGE1_HIDDEN_DIM = 896
 
@@ -49,9 +49,10 @@ def validate_stage1_cache_contract(config: dict[str, Any], *, repo_root: str | P
     manifest_path = project_path(config.get("dataset_config_path"), repo_root, label="--dataset_config_path")
     with manifest_path.open("r", encoding="utf-8") as handle:
         manifest = json.load(handle)
-    if manifest.get("format") != MEMORY_TOKEN_CACHE_FORMAT:
+    manifest_format = manifest.get("format")
+    if manifest_format != EPISODE_FEATURE_CACHE_FORMAT:
         raise ValueError(
-            f"Stage1 requires {MEMORY_TOKEN_CACHE_FORMAT} manifest, got {manifest.get('format')!r}"
+            f"Stage1 requires {EPISODE_FEATURE_CACHE_FORMAT} manifest, got {manifest_format!r}"
         )
 
     hidden_dim = int(manifest.get("hidden_dim", 0))
@@ -64,8 +65,8 @@ def validate_stage1_cache_contract(config: dict[str, Any], *, repo_root: str | P
         raise ValueError(
             f"Stage1 cache hidden_state_layers {hidden_layers!r} != required {REQUIRED_HIDDEN_STATE_LAYERS!r}"
         )
-    if int(manifest.get("hidden_state_cache_entries", 0)) <= 0:
-        raise ValueError("Stage1 cache must include current VLM hidden-state entries")
+    if int(manifest.get("node_count", 0)) <= 0:
+        raise ValueError("Stage1 episode feature cache must include at least one node")
     planner_summary = manifest.get("planner_vl_summary")
     if not isinstance(planner_summary, dict) or not bool(planner_summary.get("enabled", False)):
         raise ValueError("Stage1 cache must include planner_vl_summary generated from the VLM last valid token")
