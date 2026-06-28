@@ -32,7 +32,7 @@ def prepare_stage1_dataset(
         max_episodes=config.get("max_samples_per_file"),
     )
     logging.info(
-        "Loaded Stage1 trajectory token cache: windows=%s format=%s manifest=%s",
+        "Loaded Stage1 episode feature cache: episodes=%s format=%s manifest=%s",
         len(dataset),
         manifest_format,
         display_project_path(manifest_path, repo_root),
@@ -72,10 +72,11 @@ def prepare_stage1_dataloader(dataset: EpisodeFeatureCacheTrajectoryDataset, con
     )
     if len(dataloader) == 0:
         raise ValueError(
-            f"Stage1 dataloader has no batches. Dataset size={len(dataset)}, batch_size={batch_size}, drop_last=True."
+            f"Stage1 dataloader has no episode batches. Dataset size={len(dataset)}, "
+            f"batch_size={batch_size}, drop_last=True."
         )
     logging.info(
-        "Initialized Stage1 dataloader: batch_size=%s num_workers=%s shuffle_trajectory_windows=%s",
+        "Initialized Stage1 dataloader: episode_batch_size=%s num_workers=%s shuffle_episodes=%s",
         batch_size,
         num_workers,
         shuffle,

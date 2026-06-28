@@ -69,5 +69,5 @@ scripts/README.md
 - `src/himem_bridge_vla/runtime/`：benchmark-neutral runtime contract、feature extraction、memory builder、inference engine、websocket server。
 - `src/himem_bridge_vla/benchmarks/`：LIBERO/RMBench obs、state、action、history、runner 和 adapter 逻辑。
 - `scripts/serve/serve_policy.py`：当前 websocket 推理服务入口。
-- `src/himem_bridge_vla/training/stage1/`：active LIBERO Stage1 trajectory-window token-cache 训练逻辑。
+- `src/himem_bridge_vla/training/stage1/`：active LIBERO Stage1 episode-level fixed-replan-node feature-cache 训练逻辑。
 - `scripts/train/stage1/libero.py`：active LIBERO Stage1 训练入口。

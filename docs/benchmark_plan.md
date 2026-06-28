@@ -225,6 +225,8 @@ dataset = EpisodeFeatureCacheTrajectoryDataset(
 loader = DataLoader(dataset, batch_size=1, collate_fn=collate_direct_bridge_token_cache_windows)
 ```
 
+这里 `batch_size=1` 表示一个 optimizer step 读取一条 episode。collate 后的 `trajectory_steps` 是该 episode 内按 fixed replan node 排序的 active mini-batches；训练会顺序递推 frozen progress state，并只在 full-horizon nodes 上计算 FM loss。
+
 第三阶段只保留 eval 计划检查：
 
 ```text

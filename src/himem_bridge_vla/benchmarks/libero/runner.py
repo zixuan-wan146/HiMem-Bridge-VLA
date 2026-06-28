@@ -136,9 +136,12 @@ async def run(
                 LOG.info("\n========= Start task%s: %s =========", task_id + 1, task_description)
 
                 task_success = 0
-                task_episodes = min(num_episodes, len(initial_states))
+                episode_start = min(config.episode_offset, len(initial_states))
+                episode_stop = min(episode_start + num_episodes, len(initial_states))
+                episode_indices = range(episode_start, episode_stop)
+                task_episodes = len(episode_indices)
 
-                for ep in range(task_episodes):
+                for ep in episode_indices:
                     LOG.info("===== Task %s | Episode %s =====", task_id, ep + 1)
 
                     env.reset()

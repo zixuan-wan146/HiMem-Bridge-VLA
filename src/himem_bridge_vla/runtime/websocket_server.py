@@ -50,6 +50,8 @@ def load_model_and_normalizer(
     device: str = "cuda",
     inference_steps: int = 15,
     allow_unsafe_checkpoint_load: bool = False,
+    vlm_name: str | None = None,
+    vlm_local_files_only: bool = False,
 ):
     device = resolve_device(device)
     ckpt_dir = Path(ckpt_dir)
@@ -67,11 +69,19 @@ def load_model_and_normalizer(
         stats = json.load(f)
 
     checkpoint_load_vlm = bool(config.get("load_vlm", True))
+    if vlm_name:
+        config["vlm_name"] = vlm_name
     config["device"] = str(device)
     config["load_vlm"] = True
     config["finetune_vlm"] = False
     config["finetune_action_head"] = False
     config["num_inference_timesteps"] = inference_steps
+    config["vlm_local_files_only"] = bool(vlm_local_files_only or config.get("vlm_local_files_only", False))
+    logging.info(
+        "Runtime VLM config: vlm_name=%s local_files_only=%s",
+        config.get("vlm_name"),
+        config["vlm_local_files_only"],
+    )
 
     model = HiMemBridgeVLA(config).eval()
     checkpoint = load_checkpoint_payload(
@@ -103,7 +113,7 @@ def load_model_and_normalizer(
     return model, normalizer
 
 
-async def handle_request(websocket, engine: PolicyInferenceEngine):
+async def handle_request(websocket, engine: PolicyInferenceEngine, inference_lock: asyncio.Lock):
     logging.info("Client connected")
     runtime_state = RuntimePolicyState()
     try:
@@ -111,7 +121,8 @@ async def handle_request(websocket, engine: PolicyInferenceEngine):
             try:
                 request = policy_request_from_json(json.loads(message))
                 logging.info("Received policy request benchmark=%s", request.benchmark)
-                actions = engine.infer(request, runtime_state)
+                async with inference_lock:
+                    actions = engine.infer(request, runtime_state)
                 await websocket.send(json.dumps(actions))
                 logging.info("Sent action chunk")
             except Exception as exc:
@@ -129,6 +140,16 @@ def parse_args(argv: list[str] | None = None):
     parser.add_argument("--device", default="cuda")
     parser.add_argument("--inference_steps", type=int, default=15)
     parser.add_argument(
+        "--vlm_name",
+        default=None,
+        help="Override checkpoint config.vlm_name. May be a local model directory or a cached HF repo id.",
+    )
+    parser.add_argument(
+        "--vlm_local_files_only",
+        action="store_true",
+        help="Load the VLM only from local files/cache and never contact Hugging Face.",
+    )
+    parser.add_argument(
         "--allow_unsafe_checkpoint_load",
         action="store_true",
         help="Allow torch.load(weights_only=False) fallback for trusted local checkpoints.",
@@ -138,8 +159,9 @@ def parse_args(argv: list[str] | None = None):
 
 async def serve(engine: PolicyInferenceEngine, *, host: str, port: int) -> None:
     logging.info("HiMem-Bridge-VLA server running at ws://%s:%s", host, port)
+    inference_lock = asyncio.Lock()
     async with websockets.serve(
-        lambda ws: handle_request(ws, engine),
+        lambda ws: handle_request(ws, engine, inference_lock),
         host,
         port,
         max_size=DEFAULT_MAX_MESSAGE_SIZE,
@@ -159,6 +181,8 @@ def main(argv: list[str] | None = None) -> int:
         device=args.device,
         inference_steps=args.inference_steps,
         allow_unsafe_checkpoint_load=args.allow_unsafe_checkpoint_load,
+        vlm_name=args.vlm_name,
+        vlm_local_files_only=args.vlm_local_files_only,
     )
     engine = PolicyInferenceEngine(
         model,

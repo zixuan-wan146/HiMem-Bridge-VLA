@@ -13,6 +13,8 @@ device="${HIMEM_DEVICE:-cuda:0}"
 inference_steps="${HIMEM_INFERENCE_STEPS:-15}"
 skip_preflight="${HIMEM_SKIP_PREFLIGHT:-0}"
 allow_unsafe_checkpoint_load="${HIMEM_ALLOW_UNSAFE_CHECKPOINT_LOAD:-0}"
+vlm_name="${HIMEM_VLM_NAME:-}"
+vlm_local_files_only="${HIMEM_VLM_LOCAL_FILES_ONLY:-1}"
 
 if [ -z "$ckpt_dir" ]; then
   printf 'Usage: HIMEM_PYTHON=.venv/bin/python %s checkpoints/HiMem_LIBERO\n' "$0" >&2
@@ -53,6 +55,15 @@ server_args=(
 
 if [ "$allow_unsafe_checkpoint_load" = "1" ]; then
   server_args+=(--allow_unsafe_checkpoint_load)
+fi
+
+if [ -n "$vlm_name" ]; then
+  server_args+=(--vlm_name "$vlm_name")
+fi
+
+if [ "$vlm_local_files_only" = "1" ]; then
+  export HF_HUB_OFFLINE="${HF_HUB_OFFLINE:-1}"
+  server_args+=(--vlm_local_files_only)
 fi
 
 exec "$python_bin" "${server_args[@]}"

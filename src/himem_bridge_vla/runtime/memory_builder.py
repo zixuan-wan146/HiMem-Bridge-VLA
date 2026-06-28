@@ -5,17 +5,20 @@ from collections.abc import Mapping
 import torch
 
 from himem_bridge_vla.model.himem_bridge_vla import HiMemBridgeVLA
+from himem_bridge_vla.model.planner.progress_state import ProgressState
 
 
 class RuntimePolicyState:
     def __init__(self) -> None:
         self.executed_actions: torch.Tensor | None = None
         self.executed_action_mask: torch.Tensor | None = None
+        self.progress_state: ProgressState | None = None
 
     def reset(self, model: HiMemBridgeVLA) -> None:
+        _ = model
         self.executed_actions = None
         self.executed_action_mask = None
-        model.reset_progress_state()
+        self.progress_state = None
 
     def progress_inputs(
         self,
@@ -38,6 +41,33 @@ class RuntimePolicyState:
         return (
             self.executed_actions.to(device=device, dtype=dtype),
             self.executed_action_mask.to(device=device) if self.executed_action_mask is not None else None,
+        )
+
+    def progress_state_input(
+        self,
+        model: HiMemBridgeVLA,
+        *,
+        batch_size: int,
+        device: torch.device,
+        dtype: torch.dtype,
+    ) -> ProgressState | None:
+        planner = model.progress_state_planner
+        if planner is None:
+            return None
+        if self.progress_state is None:
+            return planner.initial_state(batch_size, device=device, dtype=dtype)
+        return ProgressState(
+            completed_events=self.progress_state.completed_events.to(device=device, dtype=dtype),
+            current_stage=self.progress_state.current_stage.to(device=device, dtype=dtype),
+        )
+
+    def store_progress_state(self, model: HiMemBridgeVLA) -> None:
+        output = getattr(model, "last_progress_planner_output", None)
+        if output is None:
+            return
+        self.progress_state = ProgressState(
+            completed_events=output.progress_state.completed_events.detach().cpu(),
+            current_stage=output.progress_state.current_stage.detach().cpu(),
         )
 
     def store_executed_actions(self, model: HiMemBridgeVLA, normalized_action: torch.Tensor) -> None:

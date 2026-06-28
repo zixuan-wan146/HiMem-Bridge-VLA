@@ -44,6 +44,7 @@ def run_script(
     *,
     skip_preflight: bool = False,
     allow_unsafe_checkpoint_load: bool = False,
+    extra_env: dict[str, str] | None = None,
 ) -> subprocess.CompletedProcess[str]:
     ckpt_arg = ckpt_dir.relative_to(REPO_ROOT).as_posix()
     env = {
@@ -57,6 +58,8 @@ def run_script(
         env["HIMEM_SKIP_PREFLIGHT"] = "1"
     if allow_unsafe_checkpoint_load:
         env["HIMEM_ALLOW_UNSAFE_CHECKPOINT_LOAD"] = "1"
+    if extra_env:
+        env.update(extra_env)
     return subprocess.run(
         ["bash", str(SCRIPT), ckpt_arg],
         cwd=REPO_ROOT,
@@ -78,6 +81,7 @@ def test_start_script_runs_checkpoint_preflight_before_server_exec(tmp_path):
     assert "--ckpt_dir" in result.stdout
     assert ckpt_dir.relative_to(REPO_ROOT).as_posix() in result.stdout
     assert "--device cpu" in result.stdout
+    assert "--vlm_local_files_only" in result.stdout
 
 
 def test_start_script_can_skip_preflight_for_debugging(tmp_path):
@@ -98,6 +102,28 @@ def test_start_script_passes_explicit_unsafe_checkpoint_flag(tmp_path):
 
     assert result.returncode == 0
     assert "--allow_unsafe_checkpoint_load" in result.stdout
+
+
+def test_start_script_passes_vlm_override_without_enabling_downloads(tmp_path):
+    ckpt_dir = make_valid_checkpoint(tmp_path)
+
+    result = run_script(
+        ckpt_dir,
+        extra_env={"HIMEM_VLM_NAME": "/models/InternVL3-1B"},
+    )
+
+    assert result.returncode == 0
+    assert "--vlm_name /models/InternVL3-1B" in result.stdout
+    assert "--vlm_local_files_only" in result.stdout
+
+
+def test_start_script_can_explicitly_allow_vlm_downloads(tmp_path):
+    ckpt_dir = make_valid_checkpoint(tmp_path)
+
+    result = run_script(ckpt_dir, extra_env={"HIMEM_VLM_LOCAL_FILES_ONLY": "0"})
+
+    assert result.returncode == 0
+    assert "--vlm_local_files_only" not in result.stdout
 
 
 def test_start_script_fails_when_preflight_rejects_checkpoint(tmp_path):

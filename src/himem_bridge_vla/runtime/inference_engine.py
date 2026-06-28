@@ -96,6 +96,14 @@ class PolicyInferenceEngine:
                     device=device,
                     dtype=fused_tokens.dtype,
                 )
+            progress_state = None
+            if runtime_state is not None:
+                progress_state = runtime_state.progress_state_input(
+                    self.model,
+                    batch_size=1,
+                    device=device,
+                    dtype=fused_tokens.dtype,
+                )
 
             action = self.model.predict_action(
                 fused_tokens,
@@ -107,6 +115,7 @@ class PolicyInferenceEngine:
                 short_memory_time_ids=short_memory_time_ids,
                 executed_actions=executed_actions,
                 executed_action_mask=executed_action_mask,
+                progress_state=progress_state,
                 planner_vl_summary=planner_vl_summary,
             )
             if action.numel() % model_action_dim != 0:
@@ -114,9 +123,12 @@ class PolicyInferenceEngine:
                     f"Model returned {action.numel()} action values, not divisible by per_action_dim={model_action_dim}"
                 )
             normalized_action = action.reshape(1, -1, model_action_dim)
+            if runtime_state is not None:
+                runtime_state.store_progress_state(self.model)
             if runtime_state is not None and request_progress_inputs is None:
                 runtime_state.store_executed_actions(self.model, normalized_action)
             denormalized_action = self.normalizer.denormalize_action(normalized_action[0], robot_key=request.robot_key)
+            denormalized_action = denormalized_action.to(dtype=torch.float32)
             actions = denormalized_action.cpu().numpy().tolist()
             if not request.return_debug:
                 return actions

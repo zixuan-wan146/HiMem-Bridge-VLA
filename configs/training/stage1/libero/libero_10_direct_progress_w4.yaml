@@ -1,4 +1,4 @@
-run_name: libero_10_stage1_direct_progress_w4
+run_name: libero_10_stage1_direct_progress_w4_episode_feature_ep5000
 seed: 42
 deterministic: false
 
@@ -10,7 +10,7 @@ dataset_config_path: local_data/token_caches/libero_10_episode_feature_internvl3
 dataset_config_base_dir: .
 cache_dir: local_data/cache/himem_bridge_vla/libero/stage1/libero_10
 
-save_dir: local_data/runs/libero/stage1/libero_10_direct_progress_w4
+save_dir: local_data/runs/libero/stage1/libero_10_direct_progress_w4_episode_feature_ep5000
 disable_wandb: true
 disable_swanlab: true
 
@@ -25,10 +25,11 @@ short_memory_time_bins: 4
 max_vlm_tokens:
 
 memory_token_cache_sequence_training: true
-burnin_replan_steps: 8
-loss_replan_steps: 8
-allow_short_burnin: true
-trajectory_window_stride: 1
+# Current Stage1 uses episode-level fixed-replan-node training:
+# each DataLoader item is one episode, progress state is advanced through
+# all episode nodes in order, and FM loss is computed on full-horizon nodes.
+# The legacy burn-in/loss-window knobs remain in the schema defaults only;
+# this episode feature cache path does not sample fixed-size trajectory windows.
 shuffle_trajectory_windows: false
 
 finetune_vlm: false
@@ -37,20 +38,21 @@ finetune_progress_planner: false
 
 enable_bridge_aux_loss: false
 
-max_steps: 10000
-warmup_steps: 1000
-batch_size: 4
-num_workers: 4
+max_steps: 5000
+warmup_steps: 500
+batch_size: 1
+num_workers: 0
 log_interval: 10
-ckpt_interval: 5000
-best_ckpt_interval: 1000
-best_ckpt_min_step: 1000
+ckpt_interval: 1000000
+best_ckpt_interval: 1
+best_ckpt_min_step: 1
 
 lr: 5.0e-5
 min_lr_ratio: 0.1
 weight_decay: 1.0e-3
 grad_clip_norm: 1.0
 dropout: 0.1
+min_cuda_memory_gb: 22.0
 
 num_inference_timesteps: 15
 inference_tau_schedule: midpoint

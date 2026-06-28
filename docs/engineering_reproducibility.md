@@ -7,7 +7,7 @@
 ```text
 himem_bridge_vla/bridge_himem_config.py    Bridge / memory / planner 配置 schema
 himem_bridge_vla/experiment_config.py      训练和模型共用配置解析
-himem_bridge_vla/training/stage1/          active LIBERO Stage1 trajectory-window token-cache training
+himem_bridge_vla/training/stage1/          active LIBERO Stage1 episode-level fixed-replan-node feature-cache training
 himem_bridge_vla/model/bridge/             legacy bridge modules
 himem_bridge_vla/model/himem/              short visual-token memory support
 himem_bridge_vla/model/planner/            progress-state planner + legacy H32 baseline
@@ -127,7 +127,7 @@ action_mask
 
 注意：LIBERO Stage1 cache 必须使用 `--encoder internvl3 --include-vlm-hidden-states --hidden-state-layers 3 6 9 12`。`current_hidden_states` 会在 collate 后变成 `vlm_hidden_states`，并由 `scripts/train/stage1/libero.py` 传给 direct bridge action head。`planner_vl_summary` 会直接喂给冻结的 progress planner。
 
-Stage1 action-side policy 训练必须走 trajectory-window cache 入口：
+Stage1 action-side policy 训练必须走 episode-level fixed-replan-node feature-cache 入口：
 
 ```bash
 "$AUTODL_TMP/miniforge3/envs/Evo1/bin/python" scripts/train/stage1/libero.py \
@@ -140,7 +140,26 @@ Stage1 action-side policy 训练必须走 trajectory-window cache 入口：
 M_k = f(M_{k-1}, x_k)
 ```
 
-每个 batch item 是一个 episode 内连续 replan window：先 burn-in 更新 `M_k` 但不计 loss，再在 loss window 上计算 masked flow-matching velocity loss。
+当前实现不是旧的 burn-in/loss-window 采样。`EpisodeFeatureCacheTrajectoryDataset` 的一个 item 是一条 episode，`batch_size` 表示 episode 数量；当前单卡训练使用 `batch_size=1`，即每个 optimizer step 处理一条 episode。训练 loop 在 episode 内按 fixed replan nodes 的时间顺序递推 frozen progress state `M`，并对所有 `action_valid_count >= horizon` 的 full-horizon nodes 计算 masked flow-matching velocity loss。LIBERO-10 当前 cache 是 500 episodes，因此 5000 optimizer steps 大约等于 500 episodes × 10 passes。
+
+本轮从 500-step checkpoint 继续训练 4500 optimizer steps 时，使用同一 profile 加以下 CLI 覆盖：
+
+```bash
+"$AUTODL_TMP/miniforge3/envs/Evo1/bin/python" scripts/train/stage1/libero.py \
+  --config configs/training/stage1/libero/libero_10_direct_progress_w4.yaml \
+  --resume \
+  --resume_path local_data/runs/libero/stage1/libero_10_direct_progress_w4_episode_feature_epoch1_floor22/step_final \
+  --max_steps 5001 \
+  --warmup_steps 500 \
+  --batch_size 1 \
+  --num_workers 0 \
+  --min_cuda_memory_gb 22 \
+  --ckpt_interval 1000000 \
+  --best_ckpt_interval 1 \
+  --best_ckpt_min_step 501
+```
+
+这里 `max_steps=5001` 是因为 checkpoint 的 `next_step=501`，训练循环跑到 `< max_steps`，所以实际新增 steps 是 `501..5000` 共 4500 步。`min_cuda_memory_gb=22` 是显式 CUDA memory floor，只用于维持本次训练的 22GB 显存占用，不代表模型真实需要这么多激活显存。
 
 注意 cache 类型不要混用：
 

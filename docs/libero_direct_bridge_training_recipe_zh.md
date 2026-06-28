@@ -10,13 +10,13 @@ $$
 N_{\mathrm{suite}} = 60000
 $$
 
-Stage 1 用于把 frozen VLM cache、short memory、plan condition、state condition 和 direct bridge action head 接起来。Stage 1 最多训练：
+Stage 1 用于把 frozen VLM cache、short memory、plan condition、state condition 和 direct bridge action head 接起来。当前 episode-level fixed-replan-node 配置训练：
 
 $$
-N_{\mathrm{stage1}} = 10000
+N_{\mathrm{stage1}} = 5000
 $$
 
-如果 `8000` step 时训练 loss、checkpoint 健康状态和烟测结果已经稳定，可以结束 Stage 1 并切入 Stage 2。
+当前 LIBERO-10 episode feature cache 有 500 条 episode，因此 5000 optimizer steps 约等于 500 episodes × 10 passes。是否切入 Stage 2 不能只看 train loss，还需要看 checkpoint 健康状态、smoke/rollout 和后续 eval。
 
 重要修正：只要 Stage 1 forward 中仍使用 W4 ProgressPlanner 的递推状态：
 
@@ -24,15 +24,14 @@ $$
 M_k = f(M_{k-1}, x_k)
 $$
 
-训练就不能把 replan frame 完全打散成独立样本。当前 Stage 1 使用 trajectory-window token-cache training：每个 batch item 是同一 episode 内连续的 replan window，先 burn-in 恢复 progress state，再在 loss window 上计算 flow matching loss。
+训练就不能把 replan frame 完全打散成独立样本。当前 Stage 1 使用 episode-level fixed-replan-node training：每个 batch item 是一条 episode，episode 内按 fixed replan nodes 顺序递推 frozen progress state `M`，并在所有 full-horizon nodes 上计算 flow matching loss。
 
 ## 2. Stage 1 Summary
 
 ```yaml
 stage_1:
   name: frozen_vlm_cache_action_side_training
-  max_steps: 10000
-  early_switch_step: 8000
+  max_steps: 5000
 
   input_mode: token_cache
   use_token_cache: true
@@ -107,47 +106,22 @@ load_vlm: false
 
 也就是训练进程不初始化 InternVL3。训练只读取 cache 中的 `fused_tokens` / `vlm_hidden_states`，因此不需要把 VLM 权重占在显存里。
 
-## 3.1 Trajectory Window Sampling
+## 3.1 Episode-Level Fixed-Replan-Node Training
 
-Stage 1 token cache 训练按 episode 构造窗口，而不是 frame-level random batch：
+Stage 1 token cache 训练按 episode 读取 fixed replan nodes，而不是 frame-level random batch，也不是旧的固定长度 trajectory window 采样。当前 cache 每个 dataset item 是一条 episode：
 
 ```yaml
 memory_token_cache_sequence_training: true
-burnin_replan_steps: 8
-loss_replan_steps: 8
-allow_short_burnin: true
-trajectory_window_stride: 1
+batch_size: 1
 ```
 
-给定一个 loss 起点 `k_0`，窗口为：
+`batch_size=1` 表示每个 optimizer step 处理一条 episode。DataLoader collate 后得到按 node 时间顺序排列的 `trajectory_steps`。训练 loop 先初始化该 episode 的 progress state：
 
 $$
-k_{\mathrm{ctx}}
-=
-\max(0,\ k_0 - B)
+M_0
 $$
 
-$$
-B = 8
-$$
-
-burn-in steps：
-
-$$
-k_{\mathrm{ctx}},\ldots,k_0-1
-$$
-
-loss steps：
-
-$$
-k_0,\ldots,k_0+L-1
-$$
-
-$$
-L = 8
-$$
-
-burn-in 阶段只递推 progress state，不计算 action loss：
+然后对 episode 内 replan nodes 顺序递推：
 
 $$
 M_k
@@ -158,37 +132,33 @@ M_{k-1},\ \bar{F}_k,\ s_k,\ A^{\mathrm{exec}}_{k-1}
 \right)
 $$
 
-loss window 中继续使用同一个递推状态，并计算 action-side flow matching loss：
+每个 node 都会更新 frozen progress state `M`。只有 `action_valid_count >= horizon` 的 full-horizon nodes 进入 action-side flow matching loss：
 
 $$
 \mathcal{L}_{\mathrm{stage1}}
 =
-\frac{1}{L}
-\sum_{k=k_0}^{k_0+L-1}
+\frac{1}{|\mathcal{K}_{\mathrm{full}}|}
+\sum_{k \in \mathcal{K}_{\mathrm{full}}}
 \mathcal{L}_{\mathrm{FM}}(k)
 $$
 
-episode 开头允许 short burn-in。也就是说当 `k_0 < B` 时，不强行丢弃 episode 前半段，而是从：
+当前 `burnin_replan_steps`、`loss_replan_steps`、`trajectory_window_stride` 是旧 window 路线留下的 schema 字段；在 `libero_episode_feature_cache` 的 episode-level path 中不用于采样。尾部不足 `H=32` 的 nodes 仍会递推 `M`，但不计算 FM loss。
 
-$$
-M_0
-$$
-
-开始递推。
-
-当前 `batch_size` 表示 window 数量，不是 frame 数量。模板中使用：
+当前训练 profile 使用：
 
 ```yaml
-batch_size: 4
+batch_size: 1
+max_steps: 5000
+warmup_steps: 500
 ```
 
-因为每个 window 有 `8` 个 loss replan steps，所以每个 optimizer step 的有效 loss rows 约为：
+因此 5000 optimizer steps 对 500 条 episode 约为：
 
 $$
-4 \times 8 = 32
+5000 / 500 = 10
 $$
 
-这与之前 frame-level batch size `32` 的有效监督规模对齐。
+也就是约 10 passes。当前从 500-step checkpoint 续训 4500 steps 时使用 `--max_steps 5001`，原因是 checkpoint 内 `next_step=501`，循环跑到 `<5001`，实际新增 `501..5000`。
 
 ## 4. Trainable Modules
 
@@ -797,11 +767,11 @@ lr:
 ```yaml
 scheduler:
   type: cosine
-  warmup_steps: 1000
+  warmup_steps: 500
   min_lr_ratio: 0.1
 ```
 
-前 `1000` step 线性 warmup，之后 cosine decay 到 peak learning rate 的 `10%`。
+前 `500` optimizer steps 线性 warmup，之后 cosine decay 到 peak learning rate 的 `10%`。本次从 500-step checkpoint resume 时，scheduler 按 checkpoint `next_step=501` 对齐继续退火。
 
 ## 15. Dropout
 
@@ -819,45 +789,46 @@ dropout:
 
 ## 16. Batch Size
 
-Stage 1 使用 trajectory-window token cache。当前 `batch_size` 表示 window 数量，不是 frame 数量。推荐：
+Stage 1 使用 episode-level fixed-replan-node feature cache。当前 `batch_size` 表示 episode 数量，不是 frame 数量，也不是 replan node 数量。推荐：
 
 ```yaml
 batch:
-  window_batch_size: 4
-  loss_replan_steps: 8
-  effective_loss_rows: 32
+  episode_batch_size: 1
+  dataset_episodes: 500
+  optimizer_steps: 5000
+  approximate_passes: 10
 ```
 
-如果显存和 loss 都稳定，可以提高 `window_batch_size`。如果训练不稳或 OOM，优先退回 `window_batch_size=2`，不要缩短 `loss_replan_steps`。
+每个 optimizer step 处理一条 episode，在 episode 内顺序递推 frozen progress state `M`，并对所有 full-horizon nodes 计算 FM loss。有效 loss rows 会随 episode 长度和尾部 full-horizon 可用性变化，不再由 `batch_size * loss_replan_steps` 固定决定。
 
 ## 17. Eval And Checkpoint
 
-当前 `scripts/train/stage1/libero.py` 是 Stage 1 的 active 训练入口，只支持 trajectory-window token cache、frozen W4 ProgressPlanner、direct bridge action head 和 masked flow-matching loss。它只实现 training loss 记录和 checkpoint 保存；还没有内置 episode-level validation loop。因此当前 `step_best` 是按训练 loss 监控得到的 health checkpoint，不应被解释为 validation-best checkpoint。
+当前 `scripts/train/stage1/libero.py` 是 Stage 1 的 active 训练入口，只支持 episode-level `libero_episode_feature_cache`、frozen W4 ProgressPlanner、direct bridge action head 和 masked flow-matching loss。它只实现 training loss 记录和 checkpoint 保存；还没有内置 episode-level validation loop。因此当前 `step_best` 是按训练 loss 监控得到的 health checkpoint，不应被解释为 validation-best checkpoint。
 
 当前实现使用：
 
 ```yaml
 checkpoint:
-  save_interval: 5000
-  best_ckpt_min_step: 1000
-  best_ckpt_interval: 1000
+  save_interval: 1000000
+  best_ckpt_min_step: 1
+  best_ckpt_interval: 1
   save_best_by: train_fm_loss
 ```
 
 其中：
 
 ```text
-save_interval = 5000:
-  保存周期 checkpoint
+save_interval = 1000000:
+  不在 5000-step Stage1 过程中保存周期 checkpoint
 
-best_ckpt_min_step = 1000:
-  warmup 结束后才开始保存 step_best
+best_ckpt_min_step = 1:
+  从训练开始就允许覆盖 step_best
 
-best_ckpt_interval = 1000:
-  即使训练 loss 频繁创新低，也最多每 1000 step 覆盖一次 step_best
+best_ckpt_interval = 1:
+  每次训练 loss 创新低都覆盖 step_best
 ```
 
-`8000` step 判断是否切 Stage 2 时，不能只看 train loss：
+判断是否切 Stage 2 时，不能只看 train loss：
 
 ```text
 train FM loss 没有数值异常
@@ -866,9 +837,9 @@ source norm 没有爆炸
 smoke rollout 没有明显异常
 ```
 
-如果满足这些条件，可以结束 Stage 1。否则继续到 `10000` step。
+如果满足这些条件，可以结束 Stage 1。否则继续完成当前 `5000` optimizer steps。
 
-后续如果加入 validation，split 应按 episode 划分，而不是按 window 随机划分：
+后续如果加入 validation，split 应按 episode 划分，而不是按 replan node 随机划分：
 
 ```yaml
 validation:
@@ -877,7 +848,7 @@ validation:
   val_ratio: 0.1
 ```
 
-原因是 window-level split 会把同一个 episode 的相邻片段同时放进 train 和 val，使 validation loss 偏乐观。
+原因是 node-level split 会把同一个 episode 的相邻片段同时放进 train 和 val，使 validation loss 偏乐观。
 
 ## 18. Metrics
 
@@ -934,8 +905,7 @@ plan_token_std
 ```yaml
 stage_1:
   name: frozen_vlm_cache_action_side_training
-  max_steps: 10000
-  early_switch_step: 8000
+  max_steps: 5000
 
   suite: libero_10
   input_mode: token_cache
@@ -952,14 +922,11 @@ stage_1:
   enable_bridge_aux_loss: false
 
   dataset:
-    cache_type: vlm_token_cache
+    cache_type: libero_episode_feature_cache
     detach_cached_tokens: true
-    sequence_training: true
-    burnin_replan_steps: 8
-    loss_replan_steps: 8
-    allow_short_burnin: true
-    trajectory_window_stride: 1
-    window_batch_size: 4
+    fixed_replan_nodes: true
+    episode_batch_size: 1
+    loss_nodes: full_horizon_only
 
   freeze:
     vision_encoder: true
@@ -1070,16 +1037,19 @@ stage_1:
 
   scheduler:
     type: cosine
-    warmup_steps: 1000
+    warmup_steps: 500
     min_lr_ratio: 0.1
 
   batch:
-    effective_batch_size: 32
+    batch_size: 1
+    unit: episode
+    dataset_episodes: 500
+    approximate_passes_for_5000_steps: 10
 
   checkpoint:
-    save_interval: 5000
-    best_ckpt_min_step: 1000
-    best_ckpt_interval: 1000
+    save_interval: 1000000
+    best_ckpt_min_step: 1
+    best_ckpt_interval: 1
     save_best_by: train_fm_loss
 ```
 

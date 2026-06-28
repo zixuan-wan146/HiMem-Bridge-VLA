@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 from dataclasses import dataclass
 import logging
 from typing import List, Sequence, Union
@@ -82,6 +84,7 @@ class InternVL3Embedder(nn.Module):
         image_size=448,
         device="cuda",
         allow_image_token_truncation: bool = False,
+        local_files_only: bool = False,
     ):
         super().__init__()
         self.device = device
@@ -89,11 +92,19 @@ class InternVL3Embedder(nn.Module):
         self.max_text_length = 1024  # InternVL3 supports up to 1024 tokens
         self.allow_image_token_truncation = bool(allow_image_token_truncation)
         self.transform = build_transform(image_size)
-        self.tokenizer = AutoTokenizer.from_pretrained(model_name, trust_remote_code=True, use_fast=False)
+        self.local_files_only = bool(local_files_only)
+        logging.info("Loading InternVL3 model from %s local_files_only=%s", model_name, self.local_files_only)
+        self.tokenizer = AutoTokenizer.from_pretrained(
+            model_name,
+            trust_remote_code=True,
+            use_fast=False,
+            local_files_only=self.local_files_only,
+        )
         self.model = AutoModel.from_pretrained(
             model_name,
             torch_dtype=torch.bfloat16,
             trust_remote_code=True,
+            local_files_only=self.local_files_only,
             use_flash_attn=True,
             low_cpu_mem_usage=True,
             _fast_init=False,

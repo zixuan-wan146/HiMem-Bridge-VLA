@@ -83,6 +83,7 @@ REQUIRED_REPO_FILES = (
     "scripts/maintenance/export_unpushed_commits.sh",
     "scripts/eval/run_libero_smoke.sh",
     "scripts/eval/run_libero_eval.sh",
+    "scripts/eval/run_libero_parallel_eval.sh",
     "scripts/report/write_libero_run_manifest.py",
     "scripts/report/summarize_libero_results.py",
     "scripts/report/check_libero_metrics.py",
@@ -103,6 +104,7 @@ REQUIRED_REPO_FILES = (
     "evaluations/legacy/rmbench/policy/HiMemBridgeVLA/deploy_policy.yml",
     "configs/runtime/libero_profiles/smoke.env",
     "configs/runtime/libero_profiles/full_eval.env",
+    "configs/runtime/libero_profiles/single_task_20_parallel.env",
 )
 
 REQUIRED_CHECKPOINT_FILES = (

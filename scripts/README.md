@@ -15,10 +15,10 @@ Scripts are grouped by responsibility. Prefer these entry points over hand-writt
 
 ## Training And Model Assets
 
-- `train/stage1/libero.py`: active LIBERO Stage1 trajectory-window token-cache training launcher. The command delegates to `src/himem_bridge_vla/training/stage1/libero/` for LIBERO-specific config/contract and `src/himem_bridge_vla/training/stage1/common/` for the shared loop.
+- `train/stage1/libero.py`: active LIBERO Stage1 episode-level fixed-replan-node feature-cache training launcher. The command delegates to `src/himem_bridge_vla/training/stage1/libero/` for LIBERO-specific config/contract and `src/himem_bridge_vla/training/stage1/common/` for the shared loop.
 - `serve/serve_policy.py`: active websocket inference server entry.
 - `download_libero_checkpoint.sh`: download the LIBERO checkpoint to the data disk.
-- `start_himem_server.sh`: start the HiMem-Bridge-VLA websocket server with checkpoint preflight.
+- `start_himem_server.sh`: start the HiMem-Bridge-VLA websocket server with checkpoint preflight. By default it passes `--vlm_local_files_only` and sets `HF_HUB_OFFLINE=1`; set `HIMEM_VLM_NAME` to a local InternVL3-1B snapshot path when the checkpoint config still contains `OpenGVLab/InternVL3-1B`. Only set `HIMEM_VLM_LOCAL_FILES_ONLY=0` when downloading is intentional.
 
 ## Benchmark Data
 
@@ -43,7 +43,7 @@ There are two different cache families:
 
 Do not pass progress warm-up caches into the direct bridge token-cache smoke; the script validates the manifest format and will reject them.
 
-For active Stage1 direct bridge-attn training, use `scripts/train/stage1/libero.py` or `python -m himem_bridge_vla.training.stage1.libero.cli`. The Stage1 loader requires `libero_episode_feature_cache` and advances the frozen progress planner state chronologically through each episode's replan nodes.
+For active Stage1 direct bridge-attn training, use `scripts/train/stage1/libero.py` or `python -m himem_bridge_vla.training.stage1.libero.cli`. The Stage1 loader requires `libero_episode_feature_cache`; `batch_size` counts episodes, not frames or replan nodes. Each optimizer step advances the frozen progress planner state chronologically through all fixed replan nodes in each episode, and computes masked flow-matching loss on nodes with a full `horizon=32` action chunk.
 
 Example:
 
@@ -108,8 +108,9 @@ bash scripts/eval/run_rmbench_eval.sh
 ## LIBERO Runs
 
 - `setup_libero_env.sh`: create or validate the LIBERO simulation environment.
-- `run_libero_smoke.sh`: minimal smoke evaluation.
-- `run_libero_eval.sh`: full LIBERO evaluation.
+- `run_libero_smoke.sh`: minimal smoke evaluation from `configs/runtime/libero_profiles/smoke.env` by default.
+- `run_libero_eval.sh`: LIBERO evaluation driven by `HIMEM_LIBERO_PROFILE` or explicit `HIMEM_LIBERO_*` env.
+- `run_libero_parallel_eval.sh`: split one LIBERO task/suite run across configured parallel clients from profile/env.
 - `plan_libero_run.py`: generate reproducible server/eval/report commands before running.
 - `init_libero_experiment.py`: create a tracked experiment skeleton.
 - `libero_profile.sh`: safe parser for `configs/runtime/libero_profiles/*.env`.

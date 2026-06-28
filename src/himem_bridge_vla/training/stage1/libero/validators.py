@@ -18,7 +18,7 @@ def enforce_stage1_contract(config: dict[str, Any]) -> None:
     if str(config.get("dataset_type")) != "memory_token_cache":
         raise ValueError("Stage1 requires dataset_type=memory_token_cache")
     if not bool(config.get("memory_token_cache_sequence_training", False)):
-        raise ValueError("Stage1 requires trajectory-window token-cache training")
+        raise ValueError("Stage1 requires episode-level fixed-replan-node token-cache training")
     if bool(config.get("load_vlm", True)):
         raise ValueError("Stage1 trains from token cache and requires load_vlm=false")
     if bool(config.get("finetune_vlm", False)):

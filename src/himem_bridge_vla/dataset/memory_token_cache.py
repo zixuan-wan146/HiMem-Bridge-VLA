@@ -1070,10 +1070,10 @@ def collate_direct_bridge_token_cache_windows(
     action_horizon: int | None = None,
     view_names: Sequence[str] | None = None,
 ) -> dict[str, Any]:
-    """Collate trajectory windows into per-timestep active mini-batches."""
+    """Collate episode/node sequences into per-timestep active mini-batches."""
 
     if not batch:
-        raise ValueError("batch must contain at least one window")
+        raise ValueError("batch must contain at least one episode sequence")
     torch = _require_torch()
     max_length = max(len(window["samples"]) for window in batch)
     steps = []
@@ -1100,7 +1100,7 @@ def collate_direct_bridge_token_cache_windows(
         step_batch["loss_mask"] = torch.tensor(loss_mask, dtype=torch.bool)
         steps.append(step_batch)
     if not steps:
-        raise ValueError("trajectory window batch contains no active steps")
+        raise ValueError("episode sequence batch contains no active steps")
     return {
         "trajectory_steps": steps,
         "batch_size": len(batch),

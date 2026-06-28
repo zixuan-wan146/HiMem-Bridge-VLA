@@ -378,7 +378,7 @@ def _run_trajectory_window_batch(
         for step_batch in batch["trajectory_steps"]
     )
     if loss_step_count <= 0:
-        raise ValueError("Stage1 trajectory window batch produced no loss terms")
+        raise ValueError("Stage1 episode batch produced no full-horizon loss terms")
 
     for step_batch in batch["trajectory_steps"]:
         batch_indices = step_batch["batch_indices"].to(device=device)
@@ -450,7 +450,7 @@ def _run_trajectory_window_batch(
         }
 
     if not loss_terms:
-        raise ValueError("Stage1 trajectory window batch produced no loss terms")
+        raise ValueError("Stage1 episode batch produced no full-horizon loss terms")
     loss = torch.stack(loss_terms).mean()
     extra_metrics = {
         "action_loss": float(loss.detach().cpu().item()),

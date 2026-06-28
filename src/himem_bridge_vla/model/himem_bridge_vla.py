@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import logging
 from contextlib import nullcontext
 from pathlib import Path
@@ -38,6 +40,7 @@ class HiMemBridgeVLA(nn.Module):
                 model_name=vlm_name,
                 device=self._device,
                 allow_image_token_truncation=bool(config.get("allow_image_token_truncation", False)),
+                local_files_only=bool(config.get("vlm_local_files_only", False)),
             )
 
         action_head_type = config.get("action_head", "flowmatching").lower()

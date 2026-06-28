@@ -29,6 +29,7 @@ Rules:
 runtime/libero_profiles/
   smoke.env      Minimal smoke run
   full_eval.env  Default full evaluation profile
+  single_task_20_parallel.env  One LIBERO task, 20 total episodes split across 4 clients
 ```
 
 Profile files are plain `KEY=VALUE` files parsed by the LIBERO run scripts. They are not shell scripts and should not contain secrets.
@@ -59,5 +60,7 @@ This template expects a repo-local symlink `local_data -> $AUTODL_TMP` on the re
 ```text
 local_data/token_caches/libero_10_episode_feature_internvl3_hidden_l3_6_9_12_stride16/manifest.json
 ```
+
+This profile is for the current episode-level fixed-replan-node Stage1 path. `batch_size` counts episodes, so `batch_size: 1` means each optimizer step processes one full episode, advances the frozen progress-state planner through that episode's fixed replan nodes in chronological order, and computes flow-matching loss on every node with a full `horizon=32` action chunk. With the current LIBERO-10 cache of 500 episodes, `max_steps: 5000` is roughly 10 passes over the episode set. Resume-specific values such as `--resume_path` and the `500 -> 5000` total-step conversion should stay as CLI overrides.
 
 Distributed training configs are intentionally absent. The active training path is single-card only.

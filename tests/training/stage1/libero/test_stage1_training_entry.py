@@ -101,7 +101,7 @@ def test_enforce_stage1_contract_rejects_frame_level_cache_training():
     config = _minimal_stage1_config()
     config["memory_token_cache_sequence_training"] = False
 
-    with pytest.raises(ValueError, match="trajectory-window"):
+    with pytest.raises(ValueError, match="episode-level fixed-replan-node"):
         enforce_stage1_contract(config)
 
 

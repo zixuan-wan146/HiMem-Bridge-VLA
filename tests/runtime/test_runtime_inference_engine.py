@@ -67,6 +67,16 @@ class FakeModel(torch.nn.Module):
         return torch.zeros(1, 1, 2, dtype=torch.float32)
 
 
+class FakeProgressPlanner:
+    config = SimpleNamespace(replan_stride=2, action_dim=2)
+
+    def initial_state(self, batch_size, *, device, dtype):
+        return SimpleNamespace(
+            completed_events=torch.zeros(batch_size, 3, device=device, dtype=dtype),
+            current_stage=torch.ones(batch_size, 3, device=device, dtype=dtype),
+        )
+
+
 def test_inference_engine_builds_short_memory_from_request_offsets():
     model = FakeModel()
     engine = PolicyInferenceEngine(model, FakeNormalizer(), state_dim=2)
@@ -122,7 +132,7 @@ def test_inference_engine_does_not_use_previous_visual_tokens_as_short_memory():
 
 def test_inference_engine_prefers_request_executed_actions_over_model_output_cache():
     model = FakeModel()
-    model.progress_state_planner = SimpleNamespace(config=SimpleNamespace(replan_stride=2, action_dim=2))
+    model.progress_state_planner = FakeProgressPlanner()
     engine = PolicyInferenceEngine(model, FakeNormalizer(), state_dim=2)
     request = PolicyRequest(
         benchmark="libero",
@@ -139,6 +149,7 @@ def test_inference_engine_prefers_request_executed_actions_over_model_output_cac
 
     assert model.predict_kwargs["executed_actions"].tolist() == [[[11.0, 12.0], [0.0, 0.0]]]
     assert model.predict_kwargs["executed_action_mask"].tolist() == [[True, False]]
+    assert model.predict_kwargs["progress_state"].current_stage.tolist() == [[1.0, 1.0, 1.0]]
     assert runtime_state.executed_actions.tolist() == [[[11.0, 12.0], [0.0, 0.0]]]
 
 
