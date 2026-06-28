@@ -30,6 +30,7 @@ runs/
 outputs/
 
 # Vendored reference repositories should stay source-only.
+reference-repo/starVLA/
 reference-repo/**/*.pdf
 reference-repo/**/*.mp4
 reference-repo/**/*.avi
