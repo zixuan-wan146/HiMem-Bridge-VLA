@@ -54,6 +54,7 @@ def test_build_libero_episode_replay_index_writes_episode_first_json(tmp_path):
     assert payload["episode_count"] == 2
     assert payload["node_count"] == 5
     assert payload["stride"] == 4
+    assert payload["action_start_offset"] == 0
     assert summary["node_count"] == 5
 
     first_episode = payload["episodes"][0]

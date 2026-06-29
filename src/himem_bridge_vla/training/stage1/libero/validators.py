@@ -26,17 +26,17 @@ def enforce_stage1_contract(config: dict[str, Any]) -> None:
     if not bool(config.get("finetune_action_head", False)):
         raise ValueError("Stage1 requires finetune_action_head=true")
     if bool(config.get("finetune_progress_planner", False)):
-        raise ValueError("Stage1 uses the frozen W4 ProgressPlanner and requires finetune_progress_planner=false")
+        raise ValueError("Stage1 uses a frozen ProgressPlanner and requires finetune_progress_planner=false")
     if bool(config.get("enable_bridge_aux_loss", False)):
         raise ValueError("Stage1 supports only masked flow-matching velocity loss; disable bridge aux loss")
     if not bool(config.get("progress_planner_enabled", False)):
         raise ValueError("Stage1 requires progress_planner.enabled=true")
     if not config.get("progress_planner_checkpoint"):
-        raise ValueError("Stage1 requires a frozen W4 progress_planner_checkpoint")
+        raise ValueError("Stage1 requires a frozen progress_planner_checkpoint")
     if int(config.get("horizon", 0)) != 32:
-        raise ValueError("Stage1 LIBERO direct-bridge training is locked to horizon=32")
+        raise ValueError("Stage1 direct-bridge training is locked to horizon=32")
     if int(config.get("progress_planner_replan_stride", 0)) != 16:
-        raise ValueError("Stage1 LIBERO direct-bridge training is locked to replan stride=16")
+        raise ValueError("Stage1 direct-bridge training is locked to replan stride=16")
     if int(config.get("num_inference_timesteps", 0)) != 15:
         raise ValueError("Stage1 rollout/smoke inference is locked to 15 Euler steps")
     if str(config.get("inference_tau_schedule", "")).lower() != "midpoint":

@@ -22,9 +22,8 @@ def prepare_stage1_dataset(
     manifest_format = _read_manifest_format(manifest_path)
     if manifest_format != EPISODE_FEATURE_CACHE_FORMAT:
         raise ValueError(
-            f"Stage1 LIBERO training requires {EPISODE_FEATURE_CACHE_FORMAT} manifest, got {manifest_format!r}. "
-            "Build it with scripts/cache/build_libero_episode_replay_index.py and "
-            "scripts/cache/build_libero_episode_feature_cache.py."
+            f"Stage1 training requires {EPISODE_FEATURE_CACHE_FORMAT} manifest, got {manifest_format!r}. "
+            "Build it with the benchmark-specific episode replay index and episode feature cache scripts."
         )
     dataset = EpisodeFeatureCacheTrajectoryDataset(
         manifest_path,

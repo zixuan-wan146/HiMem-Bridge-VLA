@@ -95,6 +95,7 @@ def test_build_libero_episode_feature_cache_writes_processed_episode_shard(tmp_p
     assert manifest["episode_count"] == 2
     assert manifest["node_count"] == 5
     assert manifest["required_visual_frame_count"] == 8
+    assert manifest["source_action_start_offset"] == 0
     assert manifest["hidden_state_layers"] == [3, 6, 9, 12]
     assert manifest["planner_vl_summary"]["enabled"] is True
     assert manifest["state_dim"] == 8

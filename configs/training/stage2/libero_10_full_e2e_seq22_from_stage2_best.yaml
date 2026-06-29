@@ -1,0 +1,84 @@
+run_name: libero_10_stage2_full_e2e_joint_seq22_from_stage2_best
+seed: 42
+deterministic: false
+
+bridge_himem_config: configs/experiments/bridge_himem/direct_progress_w4.yaml
+
+dataset_type: libero_raw_episode
+dataset_config_path: local_data/cache_indices/libero_10/episode_replay_h32_stride16.json
+normalization_source_path: local_data/token_caches/libero_10_episode_feature_internvl3_hidden_l3_6_9_12_stride16/manifest.json
+dataset_config_base_dir: .
+cache_dir: local_data/cache/himem_bridge_vla/libero/stage2/libero_10_full_e2e_from_stage1_best
+
+load_vlm: true
+finetune_vlm: true
+finetune_action_head: true
+progress_planner_enabled: true
+finetune_progress_planner: true
+enable_bridge_aux_loss: false
+
+sequence_len: 22
+stage2_sampling_mode: group
+sample_valid_future_horizon_only: true
+shuffle_episodes: true
+
+resume: true
+resume_pretrain: true
+resume_path: local_data/runs/stage2/libero_10_full_e2e_from_stage1_best/step_best_anchor_seq16_before_seq24_20260629_0950
+reset_best_loss_on_resume: true
+
+save_dir: local_data/runs/stage2/libero_10_full_e2e_seq22_from_stage2_best
+disable_wandb: true
+disable_swanlab: true
+
+horizon: 32
+per_action_dim: 7
+state_dim: 8
+memory_entry_tokens: 16
+num_layers: 8
+action_head_ffn_dim: 3584
+num_plan_slots: 8
+short_memory_time_bins: 4
+
+num_inference_timesteps: 15
+inference_tau_schedule: midpoint
+avoid_endpoint_tau: true
+
+max_steps: 50000
+warmup_steps: 2000
+
+batch_size: 1
+num_workers: 0
+log_interval: 10
+ckpt_interval: 5000
+best_ckpt_interval: 1000
+best_ckpt_min_step: 1000
+
+lr: 1.0e-6
+min_lr_ratio: 0.1
+weight_decay: 1.0e-3
+grad_clip_norm: 1.0
+dropout: 0.1
+
+lr_groups:
+  flow_matching_action_head: 1.5e-5
+  action_expert: 1.5e-5
+  bridge_attention: 2.0e-5
+  bridge_adapter: 2.0e-5
+  short_memory_encoder: 2.0e-5
+  short_memory_projector: 2.0e-5
+  plan_projector: 2.0e-5
+  progress_condition_projector: 2.0e-5
+  source_mlp: 2.0e-5
+  flow_time_embedding: 2.0e-5
+  timestep_mlp: 2.0e-5
+  noisy_action_encoder: 2.0e-5
+  gates: 1.0e-5
+  action_pos_embedding: 1.0e-5
+  temporal_pos_embedding: 1.0e-5
+
+loss:
+  action_fm: 1.0
+  vlm_ce: 0.0
+  planner_aux: 0.0
+  gripper_bce: 0.0

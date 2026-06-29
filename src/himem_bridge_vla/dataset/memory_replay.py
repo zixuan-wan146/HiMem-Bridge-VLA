@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Any
 
 
-DEFAULT_MEMORY_SHORT_OFFSETS = (32, 16)
+DEFAULT_MEMORY_SHORT_OFFSETS = (16, 8)
 DEFAULT_MEMORY_LONG_CAPACITY = 0
 DEFAULT_MEMORY_ACTION_HORIZON = 32
 DEFAULT_EXECUTED_ACTION_STRIDE = 16
@@ -19,6 +19,7 @@ class MemoryReplaySample:
     current_step: int
     episode_length: int
     action_horizon: int
+    action_start: int
     action_valid_count: int
     executed_action_stride: int
     executed_action_start: int
@@ -38,8 +39,8 @@ class MemoryReplaySample:
             "current_step": self.current_step,
             "episode_length": self.episode_length,
             "action_horizon": self.action_horizon,
-            "action_start": self.current_step,
-            "action_end": self.current_step + self.action_valid_count,
+            "action_start": self.action_start,
+            "action_end": self.action_start + self.action_valid_count,
             "action_valid_count": self.action_valid_count,
             "executed_action_stride": self.executed_action_stride,
             "executed_action_start": self.executed_action_start,
@@ -64,6 +65,7 @@ def build_memory_replay_samples(
     stride: int = 1,
     short_offsets: Sequence[int] = DEFAULT_MEMORY_SHORT_OFFSETS,
     executed_action_stride: int = DEFAULT_EXECUTED_ACTION_STRIDE,
+    action_start_offset: int = 0,
     long_candidate_steps: Iterable[int] | None = None,
     long_capacity: int = DEFAULT_MEMORY_LONG_CAPACITY,
     include_tail: bool = False,
@@ -85,6 +87,9 @@ def build_memory_replay_samples(
     executed_action_stride = int(executed_action_stride)
     if executed_action_stride <= 0:
         raise ValueError(f"executed_action_stride must be positive, got {executed_action_stride}")
+    action_start_offset = int(action_start_offset)
+    if action_start_offset < 0:
+        raise ValueError(f"action_start_offset must be non-negative, got {action_start_offset}")
     offsets = _normalize_short_offsets(short_offsets)
     if int(long_capacity) != 0:
         raise ValueError("long_capacity must be 0; long memory is produced by the progress-state planner")
@@ -93,7 +98,8 @@ def build_memory_replay_samples(
 
     samples: list[MemoryReplaySample] = []
     for current_step in range(0, episode_length, stride):
-        action_valid_count = min(action_horizon, episode_length - current_step)
+        action_start = current_step + action_start_offset
+        action_valid_count = min(action_horizon, max(0, episode_length - action_start))
         if action_valid_count < action_horizon and not include_tail:
             continue
         short_steps = tuple((current_step - offset) if current_step - offset >= 0 else None for offset in offsets)
@@ -106,6 +112,7 @@ def build_memory_replay_samples(
                 current_step=current_step,
                 episode_length=episode_length,
                 action_horizon=action_horizon,
+                action_start=action_start,
                 action_valid_count=action_valid_count,
                 executed_action_stride=executed_action_stride,
                 executed_action_start=executed_start,
@@ -130,6 +137,7 @@ def build_memory_replay_manifest(
     stride: int,
     short_offsets: Sequence[int],
     executed_action_stride: int = DEFAULT_EXECUTED_ACTION_STRIDE,
+    action_start_offset: int = 0,
     long_capacity: int = DEFAULT_MEMORY_LONG_CAPACITY,
     include_tail: bool = False,
     sample_count: int = 0,
@@ -138,6 +146,8 @@ def build_memory_replay_manifest(
 ) -> dict[str, Any]:
     if int(long_capacity) != 0:
         raise ValueError("long_capacity must be 0; long memory is produced by the progress-state planner")
+    if int(action_start_offset) < 0:
+        raise ValueError(f"action_start_offset must be non-negative, got {action_start_offset}")
     return {
         "format": "memory_replay_index",
         "version": 1,
@@ -146,6 +156,7 @@ def build_memory_replay_manifest(
         "stride": int(stride),
         "short_offsets": list(_normalize_short_offsets(short_offsets)),
         "executed_action_stride": int(executed_action_stride),
+        "action_start_offset": int(action_start_offset),
         "long_capacity": int(long_capacity),
         "include_tail": bool(include_tail),
         "sample_count": int(sample_count),

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from himem_bridge_vla.dataset.memory_replay import DEFAULT_MEMORY_SHORT_OFFSETS
 from himem_bridge_vla.dataset.memory_replay import build_memory_replay_manifest
 from himem_bridge_vla.dataset.memory_replay import build_memory_replay_samples
 from himem_bridge_vla.dataset.memory_replay import read_memory_replay_jsonl
@@ -54,6 +55,27 @@ def test_build_memory_replay_samples_can_include_tail_with_valid_count():
 
     assert [sample.current_step for sample in samples] == [0, 16, 32]
     assert [sample.action_valid_count for sample in samples] == [32, 24, 8]
+    assert DEFAULT_MEMORY_SHORT_OFFSETS == (16, 8)
+
+
+def test_build_memory_replay_samples_can_offset_future_action_targets(tmp_path):
+    samples = build_memory_replay_samples(
+        episode_id="episode0",
+        episode_length=6,
+        action_horizon=2,
+        stride=2,
+        action_start_offset=1,
+        include_tail=False,
+    )
+
+    assert [sample.current_step for sample in samples] == [0, 2]
+    assert [sample.action_start for sample in samples] == [1, 3]
+
+    rows = read_memory_replay_jsonl(write_memory_replay_jsonl(tmp_path / "memory_replay_offset_test.jsonl", samples))
+    assert rows[0]["action_start"] == 1
+    assert rows[0]["action_end"] == 3
+    assert rows[1]["action_start"] == 3
+    assert rows[1]["action_end"] == 5
 
 
 def test_build_memory_replay_manifest_records_generation_policy():
@@ -62,6 +84,7 @@ def test_build_memory_replay_manifest_records_generation_policy():
         action_horizon=32,
         stride=1,
         short_offsets=(16, 32),
+        action_start_offset=1,
         long_capacity=0,
         include_tail=False,
         sample_count=10,
@@ -72,6 +95,7 @@ def test_build_memory_replay_manifest_records_generation_policy():
     assert manifest["format"] == "memory_replay_index"
     assert manifest["short_offsets"] == [32, 16]
     assert manifest["executed_action_stride"] == 16
+    assert manifest["action_start_offset"] == 1
     assert manifest["long_capacity"] == 0
     assert manifest["task_counts"] == {"a": 6, "b": 4}
 

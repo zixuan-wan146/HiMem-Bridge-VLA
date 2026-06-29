@@ -133,7 +133,7 @@ def test_build_rmbench_memory_replay_index_script_writes_jsonl_and_manifest(tmp_
             "--manifest-output",
             str(manifest_output),
             "--action-horizon",
-            "2",
+            "1",
             "--stride",
             "1",
             "--short-offsets",
@@ -151,8 +151,12 @@ def test_build_rmbench_memory_replay_index_script_writes_jsonl_and_manifest(tmp_
     summary = json.loads(result.stdout)
     assert len(rows) == 1
     assert rows[0]["source_path"] == "data/swap_T/demo_clean/data/episode0.hdf5"
+    assert rows[0]["current_step"] == 0
+    assert rows[0]["action_start"] == 1
+    assert rows[0]["action_end"] == 2
     assert rows[0]["short_steps"] == [None, None]
     assert rows[0]["short_mask"] == [False, False]
+    assert manifest["action_start_offset"] == 1
     assert manifest["sample_count"] == 1
     assert manifest["task_counts"] == {"swap_T": 1}
     assert summary["episode_counts"] == {"swap_T": 1}

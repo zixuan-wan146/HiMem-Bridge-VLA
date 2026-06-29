@@ -1500,8 +1500,8 @@ def _validate_episode_feature_cache_manifest(manifest: Mapping[str, Any], manife
         raise ValueError(f"invalid episode feature cache format in {manifest_path}: {manifest.get('format')!r}")
     if int(manifest.get("version", -1)) != EPISODE_FEATURE_CACHE_VERSION:
         raise ValueError(f"unsupported episode feature cache version in {manifest_path}: {manifest.get('version')!r}")
-    if str(manifest.get("benchmark", "")).upper() != "LIBERO":
-        raise ValueError(f"episode feature cache currently supports LIBERO only: {manifest.get('benchmark')!r}")
+    if not str(manifest.get("benchmark", "")).strip():
+        raise ValueError(f"episode feature cache manifest must include benchmark: {manifest_path}")
     if int(manifest.get("episode_count", -1)) < 0:
         raise ValueError(f"episode feature cache manifest has invalid episode_count: {manifest.get('episode_count')!r}")
     if int(manifest.get("node_count", -1)) < 0:

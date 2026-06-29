@@ -40,6 +40,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--short-offsets", nargs="+", type=int, default=list(DEFAULT_MEMORY_SHORT_OFFSETS))
     parser.add_argument("--executed-action-stride", type=int, default=DEFAULT_EXECUTED_ACTION_STRIDE)
     parser.add_argument(
+        "--action-start-offset",
+        type=int,
+        default=1,
+        help="Offset future action targets from current_step. RMBench qpos targets default to next-qpos.",
+    )
+    parser.add_argument(
         "--long-capacity",
         type=int,
         default=DEFAULT_MEMORY_LONG_CAPACITY,
@@ -56,6 +62,8 @@ def main(argv: list[str] | None = None) -> int:
         raise ValueError("--max-episodes-per-task must be positive when provided")
     if args.executed_action_stride <= 0:
         raise ValueError("--executed-action-stride must be positive")
+    if args.action_start_offset < 0:
+        raise ValueError("--action-start-offset must be non-negative")
 
     rmbench_root = resolve_rmbench_root(args.rmbench_root)
     rows = []
@@ -76,6 +84,7 @@ def main(argv: list[str] | None = None) -> int:
             stride=args.stride,
             short_offsets=args.short_offsets,
             executed_action_stride=args.executed_action_stride,
+            action_start_offset=args.action_start_offset,
             long_capacity=args.long_capacity,
             include_tail=args.include_tail,
             benchmark="RMBench",
@@ -95,6 +104,7 @@ def main(argv: list[str] | None = None) -> int:
         stride=args.stride,
         short_offsets=args.short_offsets,
         executed_action_stride=args.executed_action_stride,
+        action_start_offset=args.action_start_offset,
         long_capacity=args.long_capacity,
         include_tail=args.include_tail,
         sample_count=len(rows),

@@ -23,6 +23,16 @@ class CudaMemoryFloor:
             raise ValueError("target_gb must be positive")
         if self.chunk_mb <= 0:
             raise ValueError("chunk_mb must be positive")
+        stats = self.refill_to_target()
+        logging.info(
+            "CUDA memory floor active: target=%.2f GiB used=%.2f GiB reserved_by_floor=%.2f GiB",
+            self.target_gb,
+            stats["used_gb"],
+            self.reserved_gb,
+        )
+        return self
+
+    def refill_to_target(self) -> dict[str, float | int | str]:
         device = _normalize_cuda_device(self.torch, self.device)
         if device.type != "cuda":
             raise ValueError(f"CUDA memory floor requires a CUDA device, got {device}")
@@ -51,13 +61,7 @@ class CudaMemoryFloor:
                 f"CUDA memory floor target was not reached: target={self.target_gb:.2f} GiB, "
                 f"used={stats['used_gb']:.2f} GiB"
             )
-        logging.info(
-            "CUDA memory floor active: target=%.2f GiB used=%.2f GiB reserved_by_floor=%.2f GiB",
-            self.target_gb,
-            stats["used_gb"],
-            self.reserved_gb,
-        )
-        return self
+        return stats
 
     @property
     def reserved_gb(self) -> float:
@@ -78,10 +82,13 @@ class CudaMemoryFloor:
             self.torch.cuda.empty_cache()
         return cuda_memory_stats(self.torch, device)
 
-    def close(self) -> None:
+    def release(self) -> None:
         self._chunks.clear()
         if self.torch.cuda.is_available():
             self.torch.cuda.empty_cache()
+
+    def close(self) -> None:
+        self.release()
 
 
 def reserve_cuda_memory_floor(
